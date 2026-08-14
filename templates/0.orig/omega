@@ -1,0 +1,43 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Microgreen chamber CFD -- specific dissipation rate                          |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      omega;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+// omega = k^0.5 / (Cmu^0.25 * L), L = 0.07 * D_port = 1.4 mm  ->  ~353 1/s
+dimensions      [0 0 -1 0 0 0 0];
+
+internalField   uniform 353;
+
+boundaryField
+{
+    inlet
+    {
+        type            turbulentMixingLengthFrequencyInlet;
+        mixingLength    0.0014;        // 0.07 * 0.02 m port diameter
+        value           uniform 353;
+    }
+
+    outlet
+    {
+        type            inletOutlet;
+        inletValue      uniform 353;
+        value           uniform 353;
+    }
+
+    "(floor|walls|hood|tray)"
+    {
+        // Blended treatment -- the near-wall cells land in the buffer layer at
+        // m2 (y+ ~ 1-30). Handled, not ideal. Check the yPlus function object.
+        type            omegaWallFunction;
+        value           uniform 353;
+    }
+}
+
+// ************************************************************************* //

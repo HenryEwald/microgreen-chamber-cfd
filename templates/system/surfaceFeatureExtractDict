@@ -1,0 +1,46 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Microgreen chamber CFD -- feature edge extraction                            |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      surfaceFeatureExtractDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+// The hood meets the lip at a CORNER, not tangentially -- the external parabola
+// has end slope 1.42 (55 deg). If that edge is not captured, snappy rounds the
+// springing off and the hood volume is wrong. 30 deg catches it comfortably,
+// along with the port rims and every box edge.
+
+chamber.stl
+{
+    extractionMethod    extractFromSurface;
+    includedAngle       150;
+
+    subsetFeatures
+    {
+        nonManifoldEdges    no;
+        openEdges           yes;
+    }
+
+    writeObj            no;
+}
+
+tray.stl
+{
+    extractionMethod    extractFromSurface;
+    includedAngle       150;
+
+    subsetFeatures
+    {
+        nonManifoldEdges    no;
+        openEdges           yes;
+    }
+
+    writeObj            no;
+}
+
+// ************************************************************************* //

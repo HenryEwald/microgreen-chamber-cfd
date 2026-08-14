@@ -1,0 +1,70 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Microgreen chamber CFD -- schemes                                            |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      fvSchemes;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+ddtSchemes
+{
+    default         steadyState;
+}
+
+gradSchemes
+{
+    default         cellLimited Gauss linear 1;
+}
+
+divSchemes
+{
+    default         none;
+
+    // linearUpwind for momentum: second order but bounded enough for a jet in a
+    // confined box. If the run will not converge, drop to `bounded Gauss upwind`
+    // to get a starting field, then restart on linearUpwind -- do NOT report a
+    // first-order result as final.
+    div(phi,U)      bounded Gauss linearUpwind grad(U);
+
+    div(phi,k)      bounded Gauss limitedLinear 1;
+    div(phi,omega)  bounded Gauss limitedLinear 1;
+
+    div((nuEff*dev2(T(grad(U))))) Gauss linear;
+
+    // --- Phase 2 (buoyantSimpleFoam) -------------------------------------
+    div(phi,h)      bounded Gauss limitedLinear 1;
+    div(phi,e)      bounded Gauss limitedLinear 1;
+    div(phi,K)      bounded Gauss limitedLinear 1;
+    div(phi,Ekp)    bounded Gauss limitedLinear 1;
+    div(phid,p)     bounded Gauss upwind;
+    div(((rho*nuEff)*dev2(T(grad(U))))) Gauss linear;
+}
+
+laplacianSchemes
+{
+    // `limited corrected 0.33` rather than plain `corrected`: snappy meshes with
+    // layers around a curved hood carry enough non-orthogonality that the
+    // unlimited form oscillates. Revisit once checkMesh reports the actual value.
+    default         Gauss linear limited corrected 0.33;
+}
+
+interpolationSchemes
+{
+    default         linear;
+}
+
+snGradSchemes
+{
+    default         limited corrected 0.33;
+}
+
+wallDist
+{
+    method          meshWave;
+}
+
+// ************************************************************************* //

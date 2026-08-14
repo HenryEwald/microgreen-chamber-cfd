@@ -1,0 +1,41 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Microgreen chamber CFD -- p_rgh (Phase 2)                                    |
+|                                                                              |
+| p_rgh = p - rho*g*h is the SOLVED pressure. `p` is derived -- do not set BCs  |
+| on it independently of this file (CLAUDE.md 5.2).                            |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      p_rgh;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [1 -1 -2 0 0 0 0];
+
+internalField   uniform 101325;
+
+boundaryField
+{
+    inlet
+    {
+        type            fixedFluxPressure;
+        value           uniform 101325;
+    }
+
+    outlet
+    {
+        type            fixedValue;
+        value           uniform 101325;
+    }
+
+    "(floor|walls|hood|tray)"
+    {
+        type            fixedFluxPressure;
+        value           uniform 101325;
+    }
+}
+
+// ************************************************************************* //

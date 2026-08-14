@@ -1,0 +1,39 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Microgreen chamber CFD -- mesh quality limits                                |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      meshQualityDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+// CLAUDE.md 7 acceptance: non-orthogonality < 65, skewness < 4.
+// maxNonOrtho is set to 65 rather than the tutorial default 65/75 pair so that
+// snappy is held to the same bar the case is judged against -- if it cannot
+// meet it, that is information, not something to relax away.
+
+maxNonOrtho             65;
+maxBoundarySkewness     20;
+maxInternalSkewness     4;
+maxConcave              80;
+minVol                  1e-13;
+minTetQuality           1e-15;
+minArea                 -1;
+minTwist                0.02;
+minDeterminant          0.001;
+minFaceWeight           0.05;
+minVolRatio             0.01;
+minTriangleTwist        -1;
+
+nSmoothScale            4;
+errorReduction          0.75;
+
+relaxed
+{
+    maxNonOrtho         75;
+}
+
+// ************************************************************************* //

@@ -1,0 +1,76 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Microgreen chamber CFD -- background block for snappyHexMesh                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      blockMeshDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+scale   1;
+
+// Resolution. Set by scripts/generate_case.sh -- do not hand-edit in a run.
+//   m1  38  58  45   base 10/3 mm    ~99 k background
+//   m2  76 116  90   base  5/3 mm   ~793 k background
+//   m3 152 232 180   base  5/6 mm   ~6.3 M background
+// After snappy carves everything outside the chamber, expect roughly
+// 0.2 M / 1.3 M / 9 M cells respectively (CLAUDE.md 7).
+nx  76;
+ny  116;
+nz  90;
+
+// Background box = internal chamber bounding box + exactly one m1 cell of margin
+// on every side. Chosen so every span is an integer multiple of 10/3 mm at all
+// three levels -- no sliver cells, no re-derivation when the level changes.
+//   x span 0.1266667 m = 38 * 10/3 mm      (chamber 0      -> 0.120000)
+//   y span 0.1933333 m = 58 * 10/3 mm      (chamber 0      -> 0.186667)
+//   z span 0.1500000 m = 45 * 10/3 mm      (chamber 0      -> 0.143334)
+xmin  -0.0033333;   xmax   0.1233333;
+ymin  -0.0033333;   ymax   0.1900000;
+zmin  -0.0033333;   zmax   0.1466667;
+
+vertices
+(
+    ($xmin $ymin $zmin)
+    ($xmax $ymin $zmin)
+    ($xmax $ymax $zmin)
+    ($xmin $ymax $zmin)
+    ($xmin $ymin $zmax)
+    ($xmax $ymin $zmax)
+    ($xmax $ymax $zmax)
+    ($xmin $ymax $zmax)
+);
+
+blocks
+(
+    hex (0 1 2 3 4 5 6 7) ($nx $ny $nz) simpleGrading (1 1 1)
+);
+
+edges
+(
+);
+
+// All background faces should be consumed by snappyHexMesh. If this patch still
+// has faces after snapping, the geometry is not closed or locationInMesh is in
+// the wrong region -- do not proceed, fix the STL.
+boundary
+(
+    background
+    {
+        type    patch;
+        faces
+        (
+            (0 3 2 1)
+            (4 5 6 7)
+            (0 1 5 4)
+            (2 3 7 6)
+            (0 4 7 3)
+            (1 2 6 5)
+        );
+    }
+);
+
+// ************************************************************************* //

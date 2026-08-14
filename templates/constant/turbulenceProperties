@@ -1,0 +1,39 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Microgreen chamber CFD -- turbulence (CLAUDE.md 5.2)                          |
+|                                                                              |
+| THE MODEL CHOICE IS NOT SETTLED. Re_port = 1319 * U_in, and the delivered     |
+| flow is unknown because 5 m3/h is a FREE-AIR rating:                          |
+|                                                                              |
+|     Q = 5.00 m3/h   U_in 4.42 m/s   Re 5830   turbulent    -> kOmegaSST       |
+|     Q = 2.50        U_in 2.21       Re 2915   TRANSITIONAL -> both, report    |
+|     Q = 1.25        U_in 1.10       Re 1450   laminar      -> laminar         |
+|                                                                              |
+| Run the baseline BOTH ways at the chosen Q and report the spread as modelling |
+| uncertainty. Do not pick one and call it settled -- this is the single        |
+| biggest modelling risk in the project.                                        |
+|                                                                              |
+| Switch with:                                                                  |
+|   foamDictionary -entry simulationType -set laminar constant/turbulenceProperties
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "constant";
+    object      turbulenceProperties;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+simulationType  RAS;
+
+RAS
+{
+    // kOmegaSST, not kEpsilon: better for low-Re near-wall and adverse pressure
+    // gradients, both of which dominate a jet in a 12 cm box.
+    RASModel        kOmegaSST;
+    turbulence      on;
+    printCoeffs     on;
+}
+
+// ************************************************************************* //

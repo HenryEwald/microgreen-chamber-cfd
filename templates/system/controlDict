@@ -1,0 +1,46 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Microgreen chamber CFD -- Phase 1 (isothermal, steady)                       |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+// Phase 1 = simpleFoam. Phase 2 = buoyantSimpleFoam (set by generate_case.sh).
+application     simpleFoam;
+
+startFrom       startTime;
+startTime       0;
+stopAt          endTime;
+endTime         4000;
+deltaT          1;
+
+writeControl    timeStep;
+writeInterval   500;
+purgeWrite      3;
+
+// CLAUDE.md 3.3 -- the tutorials ship ascii, which is slow and huge. Do not copy it.
+writeFormat     binary;
+writePrecision  8;
+writeCompression off;
+
+timeFormat      general;
+timePrecision   6;
+
+// CLAUDE.md 3.3 -- avoids re-reading every dict every iteration.
+runTimeModifiable false;
+
+functions
+{
+    #include "functions/residuals"
+    #include "functions/ports"
+    #include "functions/trayMetrics"
+    #include "functions/yPlus"
+    #include "functions/age"
+}
+
+// ************************************************************************* //

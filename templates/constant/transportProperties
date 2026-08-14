@@ -1,0 +1,20 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Microgreen chamber CFD -- Phase 1 only (simpleFoam, incompressible)          |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "constant";
+    object      transportProperties;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+transportModel  Newtonian;
+
+// Air at 20 C, 101325 Pa. This is the value Re_port = 1319 * U_in is built on
+// (CLAUDE.md 6.2) -- change it and that number changes with it.
+nu              1.516e-05;
+
+// ************************************************************************* //

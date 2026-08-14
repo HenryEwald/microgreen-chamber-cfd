@@ -1,0 +1,39 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Microgreen chamber CFD -- Phase 1 kinematic pressure (simpleFoam)            |
+|                                                                              |
+| NOTE: this is p/rho, dimensions m2/s2. Phase 2 replaces this file with the    |
+| absolute-pressure version from 0.orig.phase2/ -- see scripts/generate_case.sh |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      p;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [0 2 -2 0 0 0 0];
+
+internalField   uniform 0;
+
+boundaryField
+{
+    inlet
+    {
+        type            zeroGradient;
+    }
+
+    outlet
+    {
+        type            fixedValue;
+        value           uniform 0;
+    }
+
+    "(floor|walls|hood|tray)"
+    {
+        type            zeroGradient;
+    }
+}
+
+// ************************************************************************* //

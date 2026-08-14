@@ -1,0 +1,43 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Microgreen chamber CFD -- turbulent kinetic energy                            |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      k;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+// k = 1.5*(U*I)^2 at U_in = 4.42 m/s, I = 5 %  ->  0.0733 m2/s2
+dimensions      [0 2 -2 0 0 0 0];
+
+internalField   uniform 0.0733;
+
+boundaryField
+{
+    inlet
+    {
+        // Derived from U, so it stays consistent across the whole Q sweep
+        // without editing this file.
+        type            turbulentIntensityKineticEnergyInlet;
+        intensity       0.05;          // TBD, 5-10 % typical for a fan outlet
+        value           uniform 0.0733;
+    }
+
+    outlet
+    {
+        type            inletOutlet;
+        inletValue      uniform 0.0733;
+        value           uniform 0.0733;
+    }
+
+    "(floor|walls|hood|tray)"
+    {
+        type            kqRWallFunction;
+        value           uniform 0.0733;
+    }
+}
+
+// ************************************************************************* //

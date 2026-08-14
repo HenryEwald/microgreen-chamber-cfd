@@ -1,0 +1,25 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Microgreen chamber CFD -- THE GRAVITY STUDY KNOB (CLAUDE.md 5.2)             |
+|                                                                              |
+| Baseline is 1 g Earth, confirmed. -z is down, confirmed.                      |
+|                                                                              |
+| Phase 3 sweeps THIS FILE ONLY, via scripts/sweep_gravity.sh:                  |
+|     foamDictionary -entry value -set "(0 0 -1.635)" constant/g               |
+|                                                                              |
+| Do not hand-edit N cases. Mesh, turbulence model and BCs stay frozen across   |
+| the sweep or the result is not interpretable.                                 |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       uniformDimensionedVectorField;
+    location    "constant";
+    object      g;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [0 1 -2 0 0 0 0];
+value           (0 0 -9.81);
+
+// ************************************************************************* //

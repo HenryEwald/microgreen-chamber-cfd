@@ -1,0 +1,47 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Microgreen chamber CFD -- velocity                                           |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volVectorField;
+    object      U;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [0 1 -1 0 0 0 0];
+
+internalField   uniform (0 0 0);
+
+boundaryField
+{
+    inlet
+    {
+        // flowRateInletVelocity, NOT a hand-computed fixedValue: it takes Q
+        // directly and stays correct if the port geometry changes, which it
+        // will (CLAUDE.md 6.2). It also guarantees the mass flow exactly even
+        // though the meshed port is a faceted circle.
+        //
+        // 5 m3/h = 1.38889e-3 m3/s -- FREE AIR, an upper bound. The delivered
+        // flow is lower; sweep with scripts/sweep_Q.sh.
+        type            flowRateInletVelocity;
+        volumetricFlowRate  1.38889e-03;
+        extrapolateProfile  false;
+        value           uniform (0 0 0);
+    }
+
+    outlet
+    {
+        type            pressureInletOutletVelocity;
+        inletValue      uniform (0 0 0);
+        value           uniform (0 0 0);
+    }
+
+    "(floor|walls|hood|tray)"
+    {
+        type            noSlip;
+    }
+}
+
+// ************************************************************************* //

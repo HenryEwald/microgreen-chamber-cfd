@@ -1,0 +1,21 @@
+# This repo is authored on Windows and executed on Linux (CLAUDE.md 2.1).
+# Without this, git hands Linux CRLF files and every script dies with
+#   /bin/sh^M: bad interpreter: No such file or directory
+# and OpenFOAM chokes on the dictionaries. Force LF on everything textual.
+
+* text=auto eol=lf
+
+*.sh        text eol=lf
+*.py        text eol=lf
+*.md        text eol=lf
+Allrun      text eol=lf
+Allclean    text eol=lf
+
+# OpenFOAM dictionaries are extensionless -- name them explicitly.
+templates/0.orig/**         text eol=lf
+templates/0.orig.phase2/**  text eol=lf
+templates/constant/**       text eol=lf
+templates/system/**         text eol=lf
+
+*.stl       text eol=lf
+*.png       binary

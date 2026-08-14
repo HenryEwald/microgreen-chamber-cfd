@@ -1,0 +1,29 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Microgreen chamber CFD -- absolute pressure (Phase 2)                        |
+|                                                                              |
+| DERIVED from p_rgh. `calculated` everywhere on purpose -- setting independent |
+| BCs here is the classic buoyant-solver mistake (CLAUDE.md 5.2, 12).           |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      p;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [1 -1 -2 0 0 0 0];
+
+internalField   uniform 101325;
+
+boundaryField
+{
+    ".*"
+    {
+        type            calculated;
+        value           uniform 101325;
+    }
+}
+
+// ************************************************************************* //

@@ -1,0 +1,55 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Microgreen chamber CFD -- cell zones for post-processing                      |
+|                                                                              |
+| Run AFTER snappyHexMesh, BEFORE the solver. Creates the zones that            |
+| functions/trayMetrics reports on.                                             |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      topoSetDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+actions
+(
+    // The canopy volume: directly over the tray, from its surface (z = 25 mm)
+    // up to a mature canopy top (z = 75 mm). This is where "does air reach the
+    // whole tray" is actually answered.
+    {
+        name        canopyZoneCells;
+        type        cellSet;
+        action      new;
+        source      boxToCell;
+        box         (0.0025 0.0308335 0.025) (0.1175 0.1558335 0.075);
+    }
+    {
+        name        canopyZone;
+        type        cellZoneSet;
+        action      new;
+        source      setToCellZone;
+        set         canopyZoneCells;
+    }
+
+    // The hood volume, everything above the box top. Expected to be the worst
+    // ventilated region in the chamber (CLAUDE.md 6.1) -- this zone is how that
+    // gets measured rather than asserted.
+    {
+        name        hoodZoneCells;
+        type        cellSet;
+        action      new;
+        source      boxToCell;
+        box         (-0.01 -0.01 0.096667) (0.13 0.20 0.15);
+    }
+    {
+        name        hoodZone;
+        type        cellZoneSet;
+        action      new;
+        source      setToCellZone;
+        set         hoodZoneCells;
+    }
+);
+
+// ************************************************************************* //

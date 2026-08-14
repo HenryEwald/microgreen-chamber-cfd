@@ -1,45 +1,16 @@
-# --- Generated cases -------------------------------------------------------
-# runs/ is disposable: every case is regenerated from templates/ by a script.
-# Only the notes and the scripts that produced a case are worth keeping.
-runs/*
-!runs/.gitkeep
-!runs/**/NOTES.md
+# Generated cases -- disposable, reproducible from templates/ + scripts/ (CLAUDE.md 1.3)
+runs/
 
-# --- OpenFOAM run artefacts ------------------------------------------------
-# 0/ is a copy of 0.orig/ made by Allrun; 0.orig/ is the source of truth.
-0/
+# Generated geometry
+**/constant/triSurface/
+**/constant/extendedFeatureEdgeMesh/
+
+# OpenFOAM run artefacts
+**/processor*/
+**/postProcessing/
 log.*
-logs/
-processor*/
-postProcessing/
-VTK/
 *.foam
 *.OpenFOAM
 
-# Time directories written by the solver (0.01/, 1000/, 1.5e-05/, ...)
-[0-9]*.[0-9]*/
-constant/polyMesh/
-constant/extendedFeatureEdgeMesh/
-constant/triSurface/*.eMesh
-
-# Mesh/decomposition leftovers
-*.obj
-PyFoam*
-*.analyzed
-foam.log
-
-# --- Large binary geometry -------------------------------------------------
-# STLs live in cad/ and are tracked, but binary/huge ones are not. Uncomment
-# and use git-lfs if the CAD exports get big.
-# cad/*.stl
-
-# --- Editors / OS ----------------------------------------------------------
-*~
-.*.swp
-.DS_Store
-.vscode/
-.idea/
 __pycache__/
 *.pyc
-.venv/
-venv/

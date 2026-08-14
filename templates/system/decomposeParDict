@@ -1,0 +1,22 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Microgreen chamber CFD -- decomposition                                      |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      decomposeParDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+// CLAUDE.md 3.2 -- 8 ranks pinned to CCD0 is the default (V-cache sweet spot).
+// m1 is too small to decompose at all: ~0.2 M cells / 8 = 25 k per rank, below
+// the 50 k floor. Run m1 serial. Allrun handles this automatically.
+numberOfSubdomains  8;
+
+// scotch, not hierarchical -- handles the curved hood and port geometry better
+// and needs no manual (x y z) split (CLAUDE.md 3.3).
+method              scotch;
+
+// ************************************************************************* //

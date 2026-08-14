@@ -1,0 +1,20 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Residuals -- CLAUDE.md 9.2                                                   |
+|                                                                              |
+| "Residuals dropped >= 3-4 orders AND flattened -- not just small."            |
+| foamMonitor is NOT in this build; use foamLog + matplotlib into validation/.  |
+\*---------------------------------------------------------------------------*/
+
+residuals
+{
+    type            solverInfo;
+    libs            (utilityFunctionObjects);
+    writeControl    timeStep;
+    writeInterval   1;
+    // Regex, not a literal list: Phase 1 has no p_rgh/h/e and Phase 2 has no
+    // kinematic p. A regex matches only what is actually registered, so the
+    // same file works for both solvers without editing.
+    fields          ("(U|p|p_rgh|k|omega|h|e)");
+}
+
+// ************************************************************************* //

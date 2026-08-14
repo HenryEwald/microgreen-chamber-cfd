@@ -1,0 +1,22 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| y+ -- CLAUDE.md 7                                                            |
+|                                                                              |
+| At U_in = 4.42 m/s the near-wall cells at m2 land in the BUFFER LAYER         |
+| (y+ ~ 1-30), which is the worst place to be for wall functions. v2606's       |
+| nutkWallFunction / omegaWallFunction blend continuously so this is HANDLED,   |
+| not IDEAL.                                                                    |
+|                                                                              |
+| Report the DISTRIBUTION, not just the max. If large areas sit at y+ ~ 5-15,   |
+| say so rather than quietly reporting wall heat flux as if it were resolved.   |
+\*---------------------------------------------------------------------------*/
+
+yPlus
+{
+    type            yPlus;
+    libs            (fieldFunctionObjects);
+    writeControl    writeTime;
+    log             true;
+    writeFields     true;
+}
+
+// ************************************************************************* //

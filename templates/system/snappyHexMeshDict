@@ -1,0 +1,191 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Microgreen chamber CFD -- internal flow, meshing the chamber void            |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      snappyHexMeshDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+castellatedMesh true;
+snap            true;
+addLayers       true;
+
+geometry
+{
+    chamber.stl
+    {
+        type        triSurfaceMesh;
+        name        chamber;
+        regions
+        {
+            floor   { name floor;  }
+            walls   { name walls;  }
+            hood    { name hood;   }
+            inlet   { name inlet;  }
+            outlet  { name outlet; }
+        }
+    }
+
+    tray.stl
+    {
+        type        triSurfaceMesh;
+        name        tray;
+        regions
+        {
+            tray    { name tray; }
+        }
+    }
+
+    // Volume refinement around the two port jets. The jet sets the entire flow
+    // field (CLAUDE.md 6.2), so it is resolved well past the opening.
+    inletJet
+    {
+        type        searchableBox;
+        min         (0.040 -0.001 0.046);
+        max         (0.080  0.050 0.088);
+    }
+    outletJet
+    {
+        type        searchableBox;
+        min         (0.040 0.136 0.046);
+        max         (0.080 0.188 0.088);
+    }
+
+    // The 2.5 mm tray side slots. These are OPEN flow paths (CLAUDE.md 6.1) and
+    // are the tightest feature in the mesh -- 1.5 cells across at m2 base size,
+    // which is not resolvable. This region forces them to level 2.
+    traySlots
+    {
+        type        searchableBox;
+        min         (-0.001 0.028 -0.001);
+        max         ( 0.121 0.159  0.027);
+    }
+}
+
+castellatedMeshControls
+{
+    maxLocalCells       2000000;
+    maxGlobalCells      20000000;
+    minRefinementCells  10;
+    maxLoadUnbalance    0.10;
+    nCellsBetweenLevels 3;
+
+    features
+    (
+        { file "chamber.eMesh"; level 2; }
+        { file "tray.eMesh";    level 2; }
+    );
+
+    refinementSurfaces
+    {
+        chamber
+        {
+            level       (1 1);
+            regions
+            {
+                // Curved -- needs the extra level to stay smooth.
+                hood    { level (2 2); patchInfo { type wall; } }
+                floor   { level (1 1); patchInfo { type wall; } }
+                walls   { level (1 1); patchInfo { type wall; } }
+                // The jet openings. Level 2 => 48 cells across the port at m2.
+                inlet   { level (2 2); patchInfo { type patch; } }
+                outlet  { level (2 2); patchInfo { type patch; } }
+            }
+        }
+
+        tray
+        {
+            level       (2 2);
+            regions
+            {
+                tray    { level (2 2); patchInfo { type wall; } }
+            }
+        }
+    }
+
+    resolveFeatureAngle     30;
+
+    refinementRegions
+    {
+        inletJet    { mode inside; levels ((1e15 2)); }
+        outletJet   { mode inside; levels ((1e15 2)); }
+        traySlots   { mode inside; levels ((1e15 2)); }
+    }
+
+    // Inside the chamber void, deliberately off every symmetry plane.
+    // z = 61.3 mm is above the tray top (25 mm) and below the hood spring (96.7 mm).
+    locationInMesh          (0.0613 0.0917 0.0613);
+
+    allowFreeStandingZoneFaces true;
+}
+
+snapControls
+{
+    nSmoothPatch        3;
+    tolerance           2.0;
+    nSolveIter          50;
+    nRelaxIter          5;
+
+    nFeatureSnapIter    15;
+    implicitFeatureSnap false;
+    explicitFeatureSnap true;
+    multiRegionFeatureSnap false;
+}
+
+addLayersControls
+{
+    relativeSizes       true;
+
+    layers
+    {
+        // The wall boundary layer IS the physics for a short canopy
+        // (CLAUDE.md 7), so layers matter on every no-slip surface.
+        floor   { nSurfaceLayers 4; }
+        walls   { nSurfaceLayers 4; }
+        hood    { nSurfaceLayers 4; }
+
+        // Tray: NO layers. The side slots are only ~6 cells wide at m2 and layer
+        // insertion inside a gap that tight fails or wrecks the cell quality
+        // (CLAUDE.md 7). Accept the unlayered tray and say so when reporting
+        // anything derived from tray wall shear.
+        tray    { nSurfaceLayers 0; }
+    }
+
+    expansionRatio      1.2;
+    finalLayerThickness 0.5;
+    minThickness        0.1;
+
+    nGrow               0;
+    featureAngle        130;
+    slipFeatureAngle    30;
+    nRelaxIter          5;
+    nSmoothSurfaceNormals 1;
+    nSmoothNormals      3;
+    nSmoothThickness    10;
+    maxFaceThicknessRatio 0.5;
+    maxThicknessToMedialRatio 0.3;
+    minMedialAxisAngle  90;
+    nBufferCellsNoExtrude 0;
+    nLayerIter          50;
+    nRelaxedIter        20;
+}
+
+meshQualityControls
+{
+    #include "meshQualityDict"
+}
+
+writeFlags
+(
+    scalarLevels
+    layerSets
+    layerFields
+);
+
+mergeTolerance  1e-6;
+
+// ************************************************************************* //

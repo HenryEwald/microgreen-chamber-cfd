@@ -1,0 +1,46 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Microgreen chamber CFD -- Phase 2+ only (buoyantSimpleFoam)                   |
+|                                                                              |
+| Full compressible rho-based air, NOT Boussinesq. The gravity sweep pushes     |
+| drho/rho around and Boussinesq assumes it is small (CLAUDE.md 5.2).           |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    location    "constant";
+    object      thermophysicalProperties;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+thermoType
+{
+    type            heRhoThermo;
+    mixture         pureMixture;
+    transport       sutherland;
+    thermo          hConst;
+    equationOfState perfectGas;
+    specie          specie;
+    energy          sensibleEnthalpy;
+}
+
+mixture
+{
+    specie
+    {
+        molWeight   28.96;
+    }
+    thermodynamics
+    {
+        Cp          1004.5;
+        Hf          0;
+    }
+    transport
+    {
+        As          1.4792e-06;
+        Ts          116;
+    }
+}
+
+// ************************************************************************* //

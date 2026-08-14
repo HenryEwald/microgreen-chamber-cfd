@@ -1,0 +1,71 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Microgreen chamber CFD -- temperature (Phase 2)                              |
+|                                                                              |
+| THE LED HEAT LOAD LIVES ON THE `hood` PATCH BELOW.                            |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       volScalarField;
+    object      T;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+dimensions      [0 0 0 1 0 0 0];
+
+internalField   uniform 293.15;
+
+boundaryField
+{
+    inlet
+    {
+        type            fixedValue;
+        value           uniform 293.15;     // TBD -- ambient room air, 20 C
+    }
+
+    outlet
+    {
+        type            inletOutlet;
+        inletValue      uniform 293.15;
+        value           uniform 293.15;
+    }
+
+    hood
+    {
+        // WS2812B 16x16 panel, curved over the hood interior, 0.0256 m^2.
+        //
+        // *** WORKING VALUE: 38.4 W = 50 % of full white. PLACEHOLDER. ***
+        // Per the CLAUDE.md 6.3 energy balance this gives dT ~ 22.9 K at
+        // 5 m3/h -> a 43 C chamber, and ~66 C at the more likely 2.5 m3/h.
+        // Microgreens want 22-25 C. Runs at this power characterise the FLOW
+        // AND STRATIFICATION STRUCTURE; their absolute temperatures are NOT a
+        // prediction of the built chamber. Say so in NOTES.md and on every axis.
+        //
+        // Thermally viable would be ~5 W. Change with:
+        //   foamDictionary -entry boundaryField/hood/Q -set 5 0/T
+        type            externalWallHeatFluxTemperature;
+        mode            power;
+        Q               38.4;              // W over the whole patch
+        kappaMethod     fluidThermo;
+        value           uniform 293.15;
+    }
+
+    // Adiabatic first cut (CLAUDE.md 6.3). Real 3.33 mm plastic loses heat to
+    // the room, which RAISES the allowable LED power -- swap to
+    // externalWallHeatFluxTemperature with mode coefficient once h is known.
+    "(floor|walls)"
+    {
+        type            zeroGradient;
+    }
+
+    tray
+    {
+        // TBD. Evaporative cooling makes the substrate COLDER than the air,
+        // which strengthens the stable stratification. zeroGradient understates
+        // the effect; revisit for Phase 4.
+        type            zeroGradient;
+    }
+}
+
+// ************************************************************************* //

@@ -1,0 +1,96 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Microgreen chamber CFD -- linear solvers and relaxation                      |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      fvSolution;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+solvers
+{
+    // ---- Phase 1 (simpleFoam) -------------------------------------------
+    p
+    {
+        solver          GAMG;
+        smoother        GaussSeidel;
+        tolerance       1e-7;
+        relTol          0.01;
+    }
+
+    // ---- Phase 2 (buoyantSimpleFoam) ------------------------------------
+    p_rgh
+    {
+        solver          GAMG;
+        smoother        GaussSeidel;
+        tolerance       1e-8;
+        relTol          0.01;
+    }
+
+    "(U|k|omega|e|h)"
+    {
+        solver          PBiCGStab;
+        preconditioner  DILU;
+        tolerance       1e-8;
+        relTol          0.1;
+    }
+
+    rho
+    {
+        solver          PCG;
+        preconditioner  DIC;
+        tolerance       1e-8;
+        relTol          0.01;
+    }
+}
+
+SIMPLE
+{
+    nNonOrthogonalCorrectors 1;    // raise to match what checkMesh reports
+
+    // Closed-ish chamber: fixing a reference cell keeps p well posed if the
+    // outlet BC ever changes to something without a Dirichlet value.
+    pRefCell        0;
+    pRefValue       0;
+
+    // Phase 2 only. Ignored by simpleFoam.
+    pRefPoint       (0.0613 0.0917 0.0613);
+
+    residualControl
+    {
+        // CLAUDE.md 9.2 -- 3-4 orders AND flat. These stop the run once met;
+        // they are not a substitute for looking at the residual plot.
+        p               1e-5;
+        U               1e-5;
+        "(k|omega)"     1e-5;
+        "(h|e)"         1e-5;
+        p_rgh           1e-5;
+    }
+}
+
+relaxationFactors
+{
+    fields
+    {
+        p               0.3;
+        p_rgh           0.3;
+        rho             0.05;
+    }
+    equations
+    {
+        U               0.7;
+        "(k|omega)"     0.7;
+        "(h|e)"         0.3;
+    }
+}
+
+// NOTE (CLAUDE.md 5.2, 6.3): at the current 38.4 W working load the chamber is
+// strongly stably stratified (Ri ~ 6 on the bulk scale). Expect buoyantSimpleFoam
+// to stall or oscillate here. If it does, that is the flow telling you it is not
+// steady -- switch to buoyantPimpleFoam. Do NOT crank these factors down and
+// report the result as converged.
+
+// ************************************************************************* //

@@ -1,0 +1,53 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Mean age of air -- ventilation effectiveness, THE key chamber metric         |
+| CLAUDE.md 8.4                                                                |
+|                                                                              |
+| Sanity target: the volume-mean age should land near the nominal residence     |
+| time tau = V_air / Q.                                                         |
+|                                                                              |
+|     Q = 5 m3/h    tau = 1.82 s                                                |
+|     Q = 2.5       tau = 3.6 s                                                 |
+|     Q = 1.25      tau = 7.3 s                                                 |
+|                                                                              |
+| A mean well above tau means dead volume. Expect the hood (0.72 L, ~29 % of    |
+| the chamber, sitting entirely above the jet) to be the worst region by a wide |
+| margin -- this function object is how that gets demonstrated rather than      |
+| asserted.                                                                     |
+\*---------------------------------------------------------------------------*/
+
+age
+{
+    type            age;
+    libs            (fieldFunctionObjects);
+
+    // Steady run: solve once at write time. It is a transport solve, not free.
+    writeControl    writeTime;
+    executeControl  writeTime;
+
+    diffusion       on;      // include turbulent diffusion, not just advection
+    tolerance       1e-6;
+    nCorr           5;
+    schemesField    age;
+    log             true;
+}
+
+// Volume mean, so the number can be tracked and compared against tau directly.
+ageMean
+{
+    type            volFieldValue;
+    libs            (fieldFunctionObjects);
+    writeControl    writeTime;
+    log             true;
+    writeFields     false;
+    regionType      all;
+    operation       volAverage;
+    fields          (age);
+}
+
+ageMax
+{
+    $ageMean;
+    operation       max;
+}
+
+// ************************************************************************* //

@@ -1,0 +1,75 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| The metric surface -- CLAUDE.md 10.4 Q8                                      |
+|                                                                              |
+| Everything this project is trying to answer is evaluated on the tray top:     |
+| 0.014375 m^2 at z = 25 mm. These are the monitored quantities that must be    |
+| FLAT over the last N iterations before a run counts (CLAUDE.md 9.5).          |
+|                                                                              |
+| "What decides good?" is still open. Until it is answered these three are the  |
+| candidates: mean speed over the canopy, its uniformity, and the worst spot.   |
+\*---------------------------------------------------------------------------*/
+
+// Plane 5 mm above the tray surface -- inside a young canopy, below a mature one.
+trayPlane
+{
+    type            surfaceFieldValue;
+    libs            (fieldFunctionObjects);
+    writeControl    timeStep;
+    writeInterval   20;
+    log             true;
+    writeFields     false;
+    regionType      sampledSurface;
+    name            trayTop;
+    sampledSurfaceDict
+    {
+        type        plane;
+        planeType   pointAndNormal;
+        pointAndNormalDict
+        {
+            point   (0.06 0.0933 0.030);
+            normal  (0 0 1);
+        }
+        bounds      (0.0025 0.0308 0) (0.1175 0.1558 1);
+        interpolate true;
+    }
+    operation       areaAverage;
+    fields          (U mag(U));
+}
+
+// Uniformity. A high mean with a high CoV is not a well-mixed chamber.
+trayUniformity
+{
+    $trayPlane;
+    operation       areaNormalisedIntegrate;
+    fields          (mag(U));
+}
+
+// The worst spot on the tray -- the dead zone that decides the answer.
+trayMinMax
+{
+    type            volFieldValue;
+    libs            (fieldFunctionObjects);
+    writeControl    timeStep;
+    writeInterval   20;
+    log             true;
+    writeFields     false;
+    regionType      cellZone;
+    name            canopyZone;
+    operation       min;
+    fields          (mag(U));
+}
+
+// Whole-domain extremes. max(T) is the number that would damage the LED panel;
+// report it separately from the bulk mean (CLAUDE.md 6.3).
+domainMinMax
+{
+    type            fieldMinMax;
+    libs            (fieldFunctionObjects);
+    writeControl    timeStep;
+    writeInterval   20;
+    log             true;
+    // Regex so T is picked up in Phase 2 and silently absent in Phase 1.
+    fields          ("(U|p|p_rgh|T)");
+}
+
+// ************************************************************************* //

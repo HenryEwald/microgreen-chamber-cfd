@@ -1,0 +1,87 @@
+#!/bin/sh
+cd "$(dirname "$0")" || exit 1
+
+# CLAUDE.md 2 -- ~/.bashrc does not source OpenFOAM. Every script activates it.
+. /usr/bin/openfoam2606
+
+# shellcheck disable=SC1091
+. "$WM_PROJECT_DIR/bin/tools/RunFunctions"
+
+APP=$(getApplication)
+
+# ---------------------------------------------------------------------------
+# Geometry. Generated analytically -- there is no CAD input (CLAUDE.md 6.1).
+# ---------------------------------------------------------------------------
+if [ ! -f constant/triSurface/chamber.stl ]; then
+    echo "== generating geometry"
+    python3 ../../scripts/make_geometry.py --case . --verify > log.makeGeometry 2>&1 \
+        || { echo "geometry generation FAILED, see log.makeGeometry"; exit 1; }
+    cat log.makeGeometry
+fi
+
+# ---------------------------------------------------------------------------
+# Mesh
+# ---------------------------------------------------------------------------
+runApplication blockMesh
+runApplication surfaceFeatureExtract
+
+NPROCS=$(foamDictionary -entry numberOfSubdomains -value system/decomposeParDict)
+NCELLS=$(foamDictionary -entry blocks -value system/blockMeshDict 2>/dev/null | \
+         tr -dc '0-9 ' | awk '{print $2*$3*$4}')
+
+# CLAUDE.md 3.2 -- keep >= 50 k cells/rank. m1 is too small to decompose.
+if [ "${NCELLS:-0}" -lt 200000 ]; then
+    echo "== small mesh (${NCELLS} background cells): meshing serial"
+    runApplication snappyHexMesh -overwrite
+else
+    runApplication decomposePar -copyZero
+    # CLAUDE.md 3.2 -- always --bind-to core. Unpinned ranks migrate across CCDs
+    # and lose the L3 they warmed.
+    runParallel -np "$NPROCS" snappyHexMesh -overwrite -parallel
+    runApplication reconstructParMesh -constant
+    rm -rf processor*
+fi
+
+runApplication topoSet
+
+# CLAUDE.md 3.3 -- 10-25 % gain for a bandwidth-limited code, and it matters
+# MORE than usual on the V-cache die. Always before decomposePar.
+runApplication renumberMesh -overwrite
+
+runApplication checkMesh -allTopology -allGeometry
+
+# CLAUDE.md 9.1 -- a mesh that fails checkMesh is not a mesh. Stop here and read
+# the log rather than solving on it and discovering the problem in the results.
+if grep -q "\*\*\*" log.checkMesh; then
+    echo
+    echo "!! checkMesh reported FAILURES -- see log.checkMesh"
+    echo "!! Fix the mesh or justify every failure explicitly (CLAUDE.md 9.1)."
+    echo "!! Not solving."
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Solve
+# ---------------------------------------------------------------------------
+# CLAUDE.md 1.4 -- 0.orig is the source of truth. 0/ is a copy made here.
+restore0Dir
+
+if [ "${NCELLS:-0}" -lt 200000 ]; then
+    runApplication "$APP"
+else
+    runApplication decomposePar
+    runParallel -np "$NPROCS" "$APP"
+    runApplication reconstructPar -latestTime
+fi
+
+echo
+echo "== done. Before calling this a result, check CLAUDE.md 9:"
+echo "   1. checkMesh passed                    log.checkMesh"
+echo "   2. residuals dropped >=3-4 orders AND flattened"
+echo "   3. global continuity error small, not growing"
+echo "   4. inlet + outlet flux ~ 0             postProcessing/inletFlux, outletFlux"
+echo "   5. monitored quantities flat           postProcessing/trayPlane"
+echo "   6. mesh independence demonstrated"
+echo "   7. steady assumption validated"
+echo
+echo "   foamLog log.$APP     # -> residual series for plotting"

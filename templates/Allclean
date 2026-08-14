@@ -1,0 +1,17 @@
+#!/bin/sh
+cd "$(dirname "$0")" || exit 1
+
+. /usr/bin/openfoam2606
+# shellcheck disable=SC1091
+. "$WM_PROJECT_DIR/bin/tools/CleanFunctions"
+
+cleanCase0
+
+# Generated geometry -- reproducible from scripts/make_geometry.py, so it goes.
+rm -rf constant/triSurface
+rm -rf constant/extendedFeatureEdgeMesh
+rm -f  constant/polyMesh/*.eMesh
+rm -rf postProcessing
+rm -f  log.* case.foam
+
+echo "cleaned. 0.orig/ and the dicts are untouched (CLAUDE.md 1.4)."
