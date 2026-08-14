@@ -1,0 +1,80 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Microgreen chamber CFD -- schemes, TRANSIENT (pimpleFoam / buoyantPimpleFoam) |
+|                                                                              |
+| Swapped in by scripts/generate_case.sh --transient. Two differences from the  |
+| steady file, both of which matter:                                            |
+|                                                                              |
+|   1. ddtSchemes: `backward` (2nd-order implicit) instead of `steadyState`.    |
+|   2. divSchemes: the `bounded` prefix is REMOVED. `bounded Gauss ...` adds    |
+|      -fvm::Sp(fvc::div(phi), U), a correction for the non-zero continuity     |
+|      error a SIMPLE run carries while it is still converging. A transient run |
+|      enforces continuity every time step, so the term is unnecessary and it   |
+|      biases the solution. Copying the steady file across is the easy mistake  |
+|      here and it is silent -- the run looks fine and the answer is wrong.     |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      fvSchemes;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+ddtSchemes
+{
+    // `backward` is 2nd-order and the usual URANS choice. If it produces
+    // oscillations on the hood layer cells, `CrankNicolson 0.9` is the fallback
+    // -- blended toward Euler, still better than 1st order. Do NOT drop to
+    // plain `Euler` to make a case behave: it damps exactly the unsteadiness
+    // this run exists to measure.
+    default         backward;
+}
+
+gradSchemes
+{
+    default         cellLimited Gauss linear 1;
+}
+
+divSchemes
+{
+    default         none;
+
+    div(phi,U)      Gauss linearUpwind grad(U);
+
+    div(phi,k)      Gauss limitedLinear 1;
+    div(phi,omega)  Gauss limitedLinear 1;
+    div(phi,age)    Gauss limitedLinear 1;
+
+    div((nuEff*dev2(T(grad(U))))) Gauss linear;
+
+    // --- Phase 2b (buoyantPimpleFoam) ------------------------------------
+    div(phi,h)      Gauss limitedLinear 1;
+    div(phi,e)      Gauss limitedLinear 1;
+    div(phi,K)      Gauss limitedLinear 1;
+    div(phi,Ekp)    Gauss limitedLinear 1;
+    div(phid,p)     Gauss upwind;
+    div(((rho*nuEff)*dev2(T(grad(U))))) Gauss linear;
+}
+
+laplacianSchemes
+{
+    default         Gauss linear limited corrected 0.33;
+}
+
+interpolationSchemes
+{
+    default         linear;
+}
+
+snGradSchemes
+{
+    default         limited corrected 0.33;
+}
+
+wallDist
+{
+    method          meshWave;
+}
+
+// ************************************************************************* //

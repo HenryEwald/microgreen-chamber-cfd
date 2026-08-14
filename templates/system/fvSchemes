@@ -28,6 +28,16 @@ divSchemes
     // confined box. If the run will not converge, drop to `bounded Gauss upwind`
     // to get a starting field, then restart on linearUpwind -- do NOT report a
     // first-order result as final.
+    //
+    // ⚠ 2026-08-14 -- do NOT reach for upwind first on a LAMINAR case. The
+    // laminar arm at Q = 1.25 m3/h stalled at 1.4e-1 and the cause was NOT the
+    // scheme: with a top-hat inlet on a plain cutout the shear layer grows as
+    // sqrt(nu*x/U) and at m0 it is not resolved anywhere in the domain
+    // (x_res = 202 mm > the 186.7 mm path). Switching to upwind WOULD converge
+    // it -- by adding numerical diffusion to a jet whose measured problem is
+    // already too much diffusion, turning a visible failure into an invisible
+    // one. `generate_case.sh` now prints x_res for every laminar case; check it
+    // before touching this entry. See CLAUDE.md 7 and 5.2.
     div(phi,U)      bounded Gauss linearUpwind grad(U);
 
     div(phi,k)      bounded Gauss limitedLinear 1;

@@ -55,13 +55,80 @@ geometry
         max         (0.080 0.188 0.088);
     }
 
+    // The INLET SHEAR LAYER. Enabled only by `generate_case.sh --jetRefine`,
+    // which raises this one region a level above inletJet -- see the note in
+    // refinementRegions below for why it is opt-in rather than default.
+    //
+    // The ports are plain cutouts with a top-hat inlet BC (CLAUDE.md 6.1/6.2),
+    // so the shear layer starts at ZERO thickness on the lip and grows as
+    // delta ~ sqrt(nu*x/U). It is resolved once delta >= one cell, at
+    // x_res = h^2 * U / nu. Measured at Q = 1.25 m3/h (U = 1.105 m/s):
+    //
+    //   mesh   h at port   x_res     of the 186.7 mm inlet->outlet path
+    //   m0      1.667 mm   202.5 mm  NEVER resolved in-domain
+    //   m1      0.833 mm    50.6 mm  resolved over the last 73 %
+    //   m2      0.417 mm    12.7 mm  resolved over the last 93 %
+    //
+    // Only the INLET gets this. An outlet is a sink -- potential-flow-like,
+    // drawing near-isotropically with no directional reach and no shear layer
+    // worth resolving (CLAUDE.md 6.2). Refining it would double the cost for
+    // nothing.
+    //
+    // Box covers the first ~26 mm of jet, where the layer is thinnest and the
+    // resolution demand is highest. It hugs the port (x 50-70, z 56.7-76.7 mm)
+    // with ~4 mm of margin so the level transition has somewhere to sit.
+    jetShear
+    {
+        type        searchableBox;
+        min         (0.046 -0.001 0.052);
+        max         (0.074  0.026 0.081);
+    }
+
     // The 2.5 mm tray side slots. These are OPEN flow paths (CLAUDE.md 6.1) and
     // are the tightest feature in the mesh -- 1.5 cells across at m2 base size,
-    // which is not resolvable. This region forces them to level 2.
-    traySlots
+    // which is not resolvable. These regions force them to level 2.
+    //
+    // TWO thin boxes hugging the slots, not one box over the whole tray
+    // footprint (CLAUDE.md 7). The single-box version spanned 12 x 13.1 x 2.8 cm
+    // to resolve two 2.5 mm slits at the extreme edges in x: almost all of that
+    // volume was either inside the tray solid, where there are no cells at all,
+    // or open chamber that does not need level 2.
+    //
+    // The slots themselves sit at x in [0, 2.5] mm and [117.5, 120] mm (chamber
+    // wall to tray edge). Each box extends ~1.5 mm past the tray edge so the
+    // flow issuing from the slot is resolved too, and so the level transition
+    // has somewhere to sit -- nCellsBetweenLevels is 3.
+    //
+    // Slot resolution is IDENTICAL to the single-box version: both are level 2.
+    //
+    // ⚠ MEASURED 2026-08-14 -- this saves 0.5 %, not "substantially".
+    // Controlled comparison at m1, the two snappyHexMeshDicts differing ONLY in
+    // this block (diff runs/p1_baseline_m1 vs runs/p1_transient_m1):
+    //     one box   960,306 cells after shell refinement -> 1,069,964 final
+    //     two boxes 956,859 cells after shell refinement -> 1,064,691 final
+    //     saving      3,447 (0.36 %)                          5,273 (0.49 %)
+    // CLAUDE.md 7 predicted this would "cut the count substantially" and it does
+    // not. The single box looked expensive because it is geometrically large,
+    // but most of its volume is INSIDE the tray solid, where snappy deletes the
+    // cells at the subsetting step regardless -- refining cells that are about
+    // to be discarded costs almost nothing.
+    //
+    // Keep the two boxes: they are the honest description of the intent and they
+    // are not worse. But do NOT expect refinementRegions edits to buy headroom.
+    // The cells are in refinementSurfaces (+531 k at m1) and addLayers (+302 k);
+    // see the breakdown in blockMeshDict. Those are the only two real levers,
+    // and both trade against wall-resolved physics, so they are a scientific
+    // call rather than free optimisation.
+    traySlotLeft
     {
         type        searchableBox;
         min         (-0.001 0.028 -0.001);
+        max         ( 0.004 0.159  0.027);
+    }
+    traySlotRight
+    {
+        type        searchableBox;
+        min         ( 0.116 0.028 -0.001);
         max         ( 0.121 0.159  0.027);
     }
 }
@@ -111,9 +178,26 @@ castellatedMeshControls
 
     refinementRegions
     {
-        inletJet    { mode inside; levels ((1e15 2)); }
-        outletJet   { mode inside; levels ((1e15 2)); }
-        traySlots   { mode inside; levels ((1e15 2)); }
+        inletJet      { mode inside; levels ((1e15 2)); }
+        outletJet     { mode inside; levels ((1e15 2)); }
+        traySlotLeft  { mode inside; levels ((1e15 2)); }
+        traySlotRight { mode inside; levels ((1e15 2)); }
+
+        // jetShear is added here by `generate_case.sh --jetRefine`, at one level
+        // above inletJet. It is OPT-IN, not default, for two reasons:
+        //
+        //  1. It changes the mesh the Phase-1 independence study was built on
+        //     (validation/mesh_independence.md), which would silently invalidate it.
+        //  2. It is only needed for the LAMINAR arm. kOmegaSST does not need it --
+        //     measured 2026-08-14, its nut is 5x the molecular viscosity, which
+        //     thickens the shear layer by sqrt(6) = 2.45x and makes it resolvable
+        //     on cells that cannot resolve the real one. Turning it on for both
+        //     arms would be wasted cells on the RANS side; turning it on for only
+        //     the laminar arm would confound the model comparison. So it is an
+        //     explicit choice the operator makes and records in NOTES.md.
+        //
+        // Cost/benefit at m1: +~28 % cells buys the shear-layer resolution of m2,
+        // which costs +458 %. That is the efficient way to get it.
     }
 
     // Inside the chamber void, deliberately off every symmetry plane.

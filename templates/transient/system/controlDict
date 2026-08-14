@@ -1,0 +1,100 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Microgreen chamber CFD -- TRANSIENT (pimpleFoam / buoyantPimpleFoam)          |
+|                                                                              |
+| Time here is PHYSICAL SECONDS, not SIMPLE iterations. The reference scale is  |
+| the nominal residence time tau = V_air / Q = 1.82 s at Q = 5 m3/h, so the     |
+| endTime is set in multiples of tau and the averaging window discards the      |
+| start-from-rest transient. Both are set by scripts/generate_case.sh.          |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+application     pimpleFoam;
+
+startFrom       latestTime;    // so an interrupted run resumes instead of restarting
+startTime       0;
+stopAt          endTime;
+endTime         12;
+
+// Startup value only -- adjustTimeStep takes over immediately and ramps at
+// most 1.2x per step, so a small number here costs a few dozen steps, while
+// too large a one can blow up the first step from a rest field.
+deltaT          1e-5;
+
+adjustTimeStep  yes;
+
+// maxCo is set on the MAX Courant number, which lives in the smallest cells --
+// the surface layers, where the flow is slow and the accuracy matters least.
+// Measured 2026-08-14 at m1: max Co 3.0 came with a MEAN Co of 0.023, a factor
+// of 130. The number that actually governs whether the jet unsteadiness is
+// resolved is the Courant number in the JET, on ~0.83 mm cells at 4.42 m/s:
+//
+//     maxCo 3  ->  dt 2.5e-4 s  ->  jet Co 1.3   (~30 h for 6.6 tau -- too slow)
+//     maxCo 6  ->  dt 4.9e-4 s  ->  jet Co 2.6   <- chosen
+//     maxCo 10 ->  dt 8.2e-4 s  ->  jet Co 4.4
+//
+// 6 keeps the jet comfortably resolved while halving the step count. Do not
+// raise it further without checking the jet-region Courant number rather than
+// this dictionary entry.
+maxCo           6;
+
+// Cap the step even where the flow is quiescent: the hood is nearly stagnant
+// (CLAUDE.md 6.1) so a pure-Courant criterion would happily take a step far too
+// coarse to resolve the jet unsteadiness this run exists to measure.
+maxDeltaT       1e-3;
+
+writeControl    adjustableRunTime;
+writeInterval   0.5;
+purgeWrite      5;             // CLAUDE.md 3.3 -- disk is the binding constraint
+
+writeFormat     binary;
+writePrecision  8;
+writeCompression off;
+
+timeFormat      general;
+timePrecision   6;
+
+runTimeModifiable false;
+
+functions
+{
+    #include "functions/residuals"
+    #include "functions/ports"
+    #include "functions/trayMetrics"
+    #include "functions/yPlus"
+    #include "functions/transientMonitors"
+
+    // functions/age is deliberately NOT included here -- see the note below.
+}
+
+// ---------------------------------------------------------------------------
+// Why `age` is not in the list above (removed 2026-08-14)
+// ---------------------------------------------------------------------------
+// The age function object solves a STEADY transport equation using whatever phi
+// is current. Fired at writeTime in a transient run it answers "what age field
+// would this flow have if this instant's velocity persisted forever" -- which is
+// not the mean age of air, and not a quantity anyone wants. On a flapping jet
+// (CLAUDE.md 5.1) successive snapshots disagree with each other and none of them
+// is the answer.
+//
+// The mean age is a MEAN-FLOW property, so it is evaluated once, post-hoc, on
+// the time-averaged flux. That is exactly why functions/transientMonitors
+// averages phi: `phiMean` is divergence-free in a way no snapshot is.
+//
+// Cost is the secondary reason: at writeInterval 0.5 over 12 s that was 24
+// transport solves at nCorr 5, all of them discarded.
+//
+// To get the number after the run, on the reconstructed case:
+//     cd runs/<case> && ls -d [0-9]*        # pick the final time
+//     cp <T>/phiMean <T>/phi                # age reads phi
+//     postProcess -func age -time <T>
+// The `age` solver entry is still in fvSolution, which postProcess needs.
+// ---------------------------------------------------------------------------
+
+// ************************************************************************* //

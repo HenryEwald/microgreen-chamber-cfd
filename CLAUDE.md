@@ -151,6 +151,17 @@ OpenFOAM is **memory-bandwidth bound**, not FLOP bound. Consequences:
 
 **Keep ≥ 50 k cells/rank.** Below ~30 k, halo exchange dominates and scaling inverts.
 
+> **`templates/Allrun` implements this automatically** (since 2026-08-14). It reads the *final*
+> cell count from `log.checkMesh` — not the background count — and **halves** the rank count
+> from `decomposeParDict` until the 50 k/rank floor is met, only falling back to serial if even
+> 2 ranks cannot meet it. Halving keeps the count a power of two so it lands on whole CCD0 core
+> groups.
+>
+> The earlier all-or-nothing version dropped straight from 8 ranks to serial, which threw away
+> most of the machine on any mesh between 50 k and 400 k cells: the 380 k-cell `m0` rung failed
+> the 8-rank test (needs 400 k) and ran **serial at ~0.97 s/iteration**, against 0.326 s/iter on
+> the 4 ranks this table asks for — a **measured 3.0× loss**.
+
 Launch commands:
 
 ```bash
@@ -207,6 +218,7 @@ lose the L3 they warmed.
 │   ├── sweep_Q.sh         # Phase 1 flow ladder 5 / 2.5 / 1.25 m³/h
 │   └── sweep_gravity.sh   # Phase 3, varies constant/g only
 ├── validation/            # analytical/experimental checks, mesh independence study
+│   └── mesh_independence.md   # ← m0/m1/m2 ladder + the §9.6 acceptance evidence
 └── doc/                   # notes, figures, chamber spec sheet
 ```
 
@@ -258,6 +270,72 @@ runs/<case-id>/
 
 Start at Phase 1. Do not jump ahead — a buoyant case that will not converge is almost always
 a mesh or BC problem that Phase 1 would have exposed in 5 minutes.
+
+> ### ⚠ MEASURED 2026-08-14 — Phase 1 at `Q` = 5 m³/h is UNSTEADY. `simpleFoam` cannot do it.
+>
+> `p1_baseline_m1` ran the full 4000-iteration cap without converging. `p` oscillated in a
+> 3e-3 … 4e-2 band with a period of roughly 1000–1400 iterations — three full excursions, no
+> net descent after ~1800 — and `U` moved in phase with it, so it is the flow field, not the
+> pressure solver. Monitored quantities never went flat: tray mean speed ±9.2 %, tray CoV
+> ±17.9 %. See `runs/p1_baseline_m1/NOTES.md` and
+> `validation/p1_baseline_m1_convergence.png`.
+>
+> Physically expected in hindsight: a Ø 20 mm port at 4.42 m/s (`Re_port` = 5832) firing into
+> a 12 cm box is a **confined jet, and confined jets flap.** §9.7 anticipated exactly this.
+>
+> **Consequences:**
+> - Phase 1 at this flow rate is `pimpleFoam`, not `simpleFoam` — generate it with
+>   `scripts/generate_case.sh --transient`. The answer is a time average plus a fluctuation
+>   level, never a single converged number.
+> - **Do not read a steady Phase-1 run at `Q` = 5 m³/h as a failed setup.** Mesh, BCs, mass
+>   balance and every function object were verified good on the run that exposed this.
+> - **ANSWERED 2026-08-14 for the bottom rung: `Q` = 1.25 m³/h is unsteady too.** The hope was
+>   that the least energetic rung would settle and make Phase 1 a ~20-minute steady run. It
+>   does not. Four laminar steady runs — m0 (to **11,150** iterations), m1, m1 `--jetRefine`,
+>   plus the kOmegaSST arm — and **none converges**:
+>
+>   | | `x_res` | p plateau | orders | tray ± |
+>   |---|---|---|---|---|
+>   | `m0` | 202.5 mm | 1.40e-1 | 0.9 | ±3.0 % |
+>   | `m1` | 50.6 mm | 2.70e-1 | 0.6 | ±18.2 % |
+>   | `m1 --jetRefine` | 12.7 mm | 1.40e-1 | 0.9 | ±6.5 % |
+>
+>   Non-monotone in resolution, never within four orders of the 1e-5 target. Refining does not
+>   help — it *unmasks*, because coarse cells were damping a real oscillation numerically.
+>   **The chamber flaps at both ends of the flow ladder.** See §7 for the full refutation.
+>
+>   The one arm that "converges" is `kOmegaSST` (2.4 orders), and only because its `ν_t` is 5×
+>   molecular and damps the very physics in question (§5.2). That is not a steady flow, it is
+>   a smothered one.
+>
+> - **Consequence: Phase 1 is `pimpleFoam` at every `Q` tested.** Do not spend another steady
+>   run looking for a rung that settles. `generate_case.sh` now warns on steady + laminar.
+>   The cost is manageable at the bottom rung — Δt scales as 1/`U`, so a 6.6-τ transient is
+>   ~2.3 h at m1 and ~0.4 h at m0, against 9.1 h at 5 m³/h.
+> - Phase 2 inherits this. A buoyant case that will not converge at 5 m³/h is now the
+>   *expected* outcome, not evidence of a BC error — and §6.3's stable stratification is a
+>   second, independent reason to expect the same.
+
+> ### Transient cost — `m2` is infeasible, run the transient at `m0`
+>
+> Projected 2026-08-14 from the template's own measured anchors (2.28 s/step at
+> `nCorrectors` 2, Δt 4.9e-4 s at `maxCo` 6), for a 6.6-τ run on 8 ranks:
+>
+> | | cells | Δt | steps | wall clock |
+> |---|---|---|---|---|
+> | `m0` | 380 k | 9.8e-4 | 12,245 | **1.6 h** |
+> | `m1` | 1.07 M | 4.9e-4 | 24,490 | **9.1 h** |
+> | `m2` | 5.97 M | 2.4e-4 | 48,980 | **102 h — 4.2 days** |
+>
+> **`m2` pays twice:** 5.6× the work per step *and* 2× the steps, because the Courant-limited
+> Δt halves with the cells. It cannot carry a time-accurate run on this machine.
+> **Transient mesh independence is therefore `m0`/`m1`;** `m2` is for steady work only.
+>
+> §9.6 measures the justification: at m0 the tray metrics are within 0.3 % / 2.0 % of m1,
+> against a temporal fluctuation of ±3.6 % / ±7.9 %. The mesh is not the limiting error.
+>
+> Lower `Q` is cheaper too — Δt scales as 1/`U`, so a transient at m1 costs 9.1 h at
+> 5 m³/h, 4.6 h at 2.5, and 2.3 h at 1.25.
 
 ### 5.2 Key modelling decisions
 
@@ -313,6 +391,45 @@ turbulent** — this is the single biggest modelling risk in the project.
   local turbulent Reynolds number collapses and `kOmegaSST` is being used outside its comfort
   zone. Do not report near-wall heat flux as if it were resolved.
 - `kEpsilon` only if matching a published chamber study that used it.
+
+> ### ⚠ MEASURED 2026-08-14 — at `Q` = 1.25 m³/h `kOmegaSST` solves a **6× more viscous
+> chamber**. Its better convergence is an artefact, not a virtue.
+>
+> Both arms run at m0, `Q` = 1.25 m³/h (`Re_port` = 1458), identical mesh and BCs — only
+> `constant/turbulenceProperties` differs. `postProcess -func nutStats` on the RANS arm:
+>
+> | | value |
+> |---|---|
+> | molecular `ν` | 1.516e-5 m²/s |
+> | volume-average `ν_t` | **7.624e-5 m²/s** |
+> | **`ν_eff`/`ν`** | **6.0×** |
+> | **effective `Re`** | **1458 → 242** |
+>
+> At `Re_eff` = 242 the flow is deeply laminar and trivially steady. That is the whole
+> explanation for the convergence gap:
+>
+> | | laminar | kOmegaSST |
+> |---|---|---|
+> | p residual, orders dropped | 0.9 | **2.4** |
+> | p plateau | 1.4e-1 | **4.4e-3** |
+> | **tray mean speed** [m/s] | **0.0288** | **0.0545** |
+> | tray CoV | 0.952 | 0.593 |
+>
+> **The 89 % spread on the primary metric is over-diffusion of the jet, not a modelling
+> subtlety.** `kOmegaSST` is producing spurious eddy viscosity at a Reynolds number where there
+> is no turbulence to model, and the extra `ν_t` also thickens the shear layer by √6 = 2.45×,
+> which is why the RANS arm tolerates a mesh that cannot resolve the real one (§7).
+>
+> **Consequences:**
+> - **At `Q` = 1.25 m³/h the laminar arm is the physically defensible one.** Do not read
+>   `kOmegaSST`'s clean residuals as evidence it is the better model here — it converges
+>   *because* it is wrong.
+> - The 89 % spread dwarfs both the mesh error (0.3 %, §9.6) and the temporal fluctuation
+>   (±3.6 %). **Model choice is by far the largest error bar in the project**, exactly as this
+>   section has claimed — now quantified rather than asserted.
+> - Still run both and report the spread. But report *which one you believe and why*, rather
+>   than presenting them as equally weighted.
+> - `generate_case.sh` warns when `Re_port` < 2300 and a turbulent closure is selected.
 
 **Humidity.** Three escalating options — pick the cheapest that answers the question:
 1. **Passive scalar** via the `scalarTransport` function object (`src/functionObjects/solvers/scalarTransport`).
@@ -486,7 +603,7 @@ object will show this immediately.
 |---|---|---|---|
 | Fan | — | **LD3007MS** — 30 × 30 × 7 mm DC axial | mounted over a Ø 20 mm port |
 | Fan rating | `Q_free` | **5 m³/h — FREE AIR (zero back-pressure)** | **an upper bound, not the operating point** — see the note below |
-| Operating flow | `Q_op` | **`TBD` — sweep 5 / 2.5 / 1.25 m³/h** | the single largest uncertainty in the project now |
+| Operating flow | `Q_op` | **`TBD` — sweep 5 / 2.5 / 1.25 m³/h. WORKING VALUE = 1.25** (default in `generate_case.sh` since 2026-08-14) | the single largest uncertainty in the project now. 1.25 is the bottom rung and the most likely to bracket the real point — see the free-air note below. Still a placeholder, not a measurement |
 | Inlet bulk velocity | `U_in` | `Q / A_port`, `A_port` = 3.1416e-4 m² ⇒ **4.42 / 2.21 / 1.10 m/s** | let `flowRateInletVelocity` compute it; do not hard-code |
 | Chamber bulk velocity | `U_bulk` | `Q` / mid-plane free area (**126.05 cm²** = 116.0 box + 38.8 hood − 28.75 tray) ⇒ **0.110 / 0.055 / 0.028 m/s** | 40× slower than the jet — see the `Ri` note |
 | Air changes per hour | ACH | `Q` ÷ 2.530 L ⇒ **1976 / 988 / 494 h⁻¹** | enormous, but normal for a 2.53 L box |
@@ -712,18 +829,72 @@ parameter change that breaks the geometry is caught at generation time rather th
 function object every case and report the distribution, not just the max. If large areas sit
 at `y⁺` ≈ 5–15, say so rather than quietly reporting wall heat flux as if it were resolved.
 
+> **⚠ MEASURED 2026-08-14 — the warning above is pessimistic.** `p1_baseline_m1`, at the
+> *worst case* for this (m1, the coarsest mesh, and `Q` = 5 m³/h, the highest flow):
+>
+> | patch | max `y⁺` | area-average `y⁺` |
+> |---|---|---|
+> | floor | 1.42 | 0.35 |
+> | walls | 6.06 | 0.77 |
+> | hood | 1.27 | 0.49 |
+> | tray | 4.92 | 1.24 |
+>
+> Almost the whole wall area is **below `y⁺` = 1**, i.e. in the viscous sublayer, not the
+> 1–30 buffer band. m2 halves the cell size so it will sit lower still, and any `Q` below
+> 5 m³/h lowers it further. The blended wall functions are well-behaved in this regime.
+>
+> This is not licence to stop checking — it is one mesh at one flow rate, and the surface
+> layers are what put it there, so a change to `nSurfaceLayers` or the expansion ratio moves
+> it. Keep running the `yPlus` FO. But the "worst place to be" concern should not be carried
+> into Phase 2 write-ups as though it were still expected.
+
 - Background block: **isotropic cells**, aligned to the box axes. **Base cell = 10/3 mm and
-  its halves** — every internal dimension (120, 96⅔, 186⅔ mm, and 146⅔ mm if the hood sits on
+  its halves** (and, for the `m0` rung only, its double — see below) — every internal
+  dimension (120, 96⅔, 186⅔ mm, and 146⅔ mm if the hood sits on
   top) is an exact multiple of 10/3 mm, so `blockMesh` divides cleanly with no stray sliver
   cells at the far walls.
 
   Full internal height is **14⅓ cm = 43 base cells at m1** — exact, since 29/3 + 14/3 = 43/3 cm.
 
-  | Level | Base cell | Background (incl. 1-cell margin) | Final cells | Run as |
+  **⚠ `m1` is the coarsest EXACT mesh — measured 2026-08-14.** The internal dims are
+  360 / 560 / 430 thirds-of-a-mm and their GCD is **10**, i.e. 10/3 mm = the m1 base is the
+  *largest* base cell that divides all three exactly. No coarser rung can be exact. That is
+  fine — `m0` takes 19 × 29 × 23, giving a z cell of 6.522 mm against 6.667 mm in x and y, a
+  2.2 % anisotropy (aspect ratio 1.02). The background patch is entirely consumed by snappy
+  and the hood is a curved surface that never lay on a cell boundary at any level anyway.
+
+  | Level | Base cell | Background (incl. 1-cell margin) | Final cells | Steady 4000 iter |
   |---|---|---|---|---|
-  | `m1` | 3.333 mm | 38 × 58 × 45 = 99 k | **1.07 M** (measured) | **serial**, ~2 min |
-  | `m2` | 1.667 mm | 76 × 116 × 90 = 793 k | **5.97 M** (measured) | 8 ranks CCD0, ~5 min |
-  | `m3` | 0.833 mm | 152 × 232 × 180 = 6.35 M | **~33 M** (extrapolated) | ⚠ see below |
+  | `m0` | 6.667 mm | 19 × 29 × 23 = 12.7 k | **380 k** (measured) | **21.6 min**, 4 ranks |
+  | `m1` | 3.333 mm | 38 × 58 × 45 = 99 k | **1.07 M** (measured) | **55.7 min**, 8 ranks |
+  | `m2` | 1.667 mm | 76 × 116 × 90 = 793 k | **5.97 M** (measured) | ~5.2 h, 8 ranks (proj.) |
+  | `m3` | 0.833 mm | 152 × 232 × 180 = 6.35 M | **~33 M** (extrapolated) | ⚠ **NOT BUILDABLE** |
+
+  **The independence ladder is `m0`/`m1`/`m2`, running DOWNWARD** (linear ratios `r` = 1.41 and
+  1.77, both clearing the `r ≥ 1.3` that GCI wants). See `validation/mesh_independence.md`.
+
+> ### ⚠ `m0` needs level-3 tray refinement or it silently solves a different chamber
+>
+> Measured 2026-08-14. At the template's level 2 the local cell at m0 is 1.667 mm and the
+> 2.5 mm tray side slots get 1.5 cells across — **snappy seals them both.** It is a clean
+> `Mesh OK`, and the *only* symptom is the total volume:
+>
+> | | total volume | vs `V_air` = 2.5302e-3 m³ |
+> |---|---|---|
+> | m0, tray level 2 | 2.5147e-3 m³ | **−15.5 mL** |
+> | the two tray slots | 1.56e-5 m³ | **15.6 mL — 99 % of the deficit** |
+> | m0, tray level 3 | 2.53008e-3 m³ | −0.12 mL ✓ |
+>
+> Level 3 (0.833 mm, 3 cells across) restores the flow path at 205 k → 380 k cells.
+> `scripts/generate_case.sh` applies it automatically for `--mesh m0`.
+>
+> **Always check total volume against `V_air`, not just `Mesh OK`.** A sealed slot is invisible
+> to every other mesh metric. It also does not fail fast: the run dies at the *first write*,
+> when `traySlotFlux` samples a plane that now has no faces — after the solve looks healthy.
+>
+> Note this makes the slot cell size 0.833 / 0.833 / 0.417 mm across m0/m1/m2, i.e. the
+> m0 → m1 step does **not** refine the slots, it refines everything else. Deliberate:
+> preserving flow topology beats a uniform refinement ratio on a feature carrying 0.23 % of `Q`.
 
 > ### ⚠ Measured 2026-08-14 — the earlier estimates in this table were ~5× low
 >
@@ -742,16 +913,123 @@ at `y⁺` ≈ 5–15, say so rather than quietly reporting wall heat flux as if 
 > 3. `m2` at 5.97 M sits in the §3.2 "3–10 M, benchmark 8 vs 16 ranks" band, not the
 >    "0.5–3 M, 8 ranks" band it was assumed to be in.
 >
-> **The refinement regions are where the cells are going, and `traySlots` is the worst
-> offender:** it is a single box spanning the *entire* tray footprint (12 × 13.1 × 2.8 cm) at
-> level 2, when the thing it exists to resolve is two 2.5 mm slots at the extreme edges in `x`.
-> Almost all of that volume is either inside the tray solid or open chamber that does not need
-> level 2. Replacing it with two thin boxes hugging the slots (`x` ∈ [−1, 4] mm and
-> [116, 121] mm) would cut the count substantially at identical slot resolution, and is the
-> obvious first move before attempting m3. **Not done — it changes the refinement the study is
-> built on, so it is the user's call.**
+> ### ⚠ CORRECTED 2026-08-14 — the refinement regions are NOT where the cells are
+>
+> This section previously claimed `traySlots` was "the worst offender" and that replacing its
+> single box with two thin boxes hugging the slots "would cut the count substantially".
+> **Both claims are wrong.** The change was made and measured, in a controlled A/B where the
+> two `snappyHexMeshDict`s differ *only* in that block (`diff runs/p1_baseline_m1
+> runs/p1_transient_m1`):
+>
+> | | after shell refinement | final |
+> |---|---|---|
+> | one box | 960,306 | 1,069,964 |
+> | two boxes | 956,859 | 1,064,691 |
+> | **saving** | **3,447 (0.36 %)** | **5,273 (0.49 %)** |
+>
+> The single box *looked* expensive because it is geometrically large, but most of its volume
+> is **inside the tray solid**, where snappy deletes the cells at the subsetting step
+> regardless. Refining cells that are about to be discarded costs almost nothing.
+>
+> **Where the cells actually are** (m1, from `log.snappyHexMesh`):
+>
+> | stage | cells | Δ |
+> |---|---|---|
+> | background | 99 k | |
+> | + feature refinement | 130 k | +31 k |
+> | **+ surface refinement** | **661 k** | **+531 k ← dominant** |
+> | + shell refinement (the boxes) | 960 k | +299 k |
+> | − subsetting (drop outside-chamber) | 768 k | −192 k |
+> | **+ layers** | **1,070 k** | **+302 k, i.e. +39 % of the pre-layer mesh** |
+>
+> So the only two real levers are **`refinementSurfaces`** and **`addLayersControls`**, and
+> both trade against wall-resolved physics — they are a scientific call, not free
+> optimisation. Do not expect `refinementRegions` edits to buy headroom. The two-box version
+> is kept because it is the honest description of the intent, not because it is cheaper.
 - Ø 20 mm port ⇒ **12 cells across the port at m2**, 24 at m3, before refinement. Level 2 on
   the port walls gives 48 at m2 — enough to resolve the jet that sets the whole flow field.
+
+> ### ⚠ MEASURED 2026-08-14 — "cells across the port" is the wrong criterion for a LAMINAR run
+>
+> Cells across the *port* says nothing about cells across the **shear layer**, and the shear
+> layer is what a laminar run has to resolve. The ports are plain cutouts carrying a top-hat
+> inlet BC (§6.1/§6.2), so the layer starts at **zero thickness on the lip** and grows as
+> `δ ~ √(νx/U)`. It is resolved once `δ ≥ h`, i.e. beyond
+>
+> ```
+>     x_res = h² · U / ν          h = cell size at the port = base/4 at level 2
+> ```
+>
+> At `Q` = 1.25 m³/h (`U` = 1.105 m/s), against the 186.7 mm inlet→outlet path:
+>
+> | mesh | `h` at port | `x_res` | verdict |
+> |---|---|---|---|
+> | `m0` | 1.667 mm | **202.5 mm** | **NEVER resolved in-domain** |
+> | `m1` | 0.833 mm | 50.6 mm | resolved over the last 73 % |
+> | `m2` | 0.417 mm | 12.7 mm | resolved over the last 93 % |
+>
+> ### ⚠ This criterion is REAL but it is NOT why the steady laminar run stalls
+>
+> An earlier version of this section claimed the unresolved shear layer was "the root cause of
+> the stalled laminar run". **That was a hypothesis, it was tested, and it is refuted.**
+> Recorded here so nobody re-runs the experiment.
+>
+> Three laminar runs at `Q` = 1.25 m³/h, everything fixed except mesh resolution — a 16× range
+> in `x_res`:
+>
+> | case | `x_res` | cells | p plateau | orders | tray mean | tray ± |
+> |---|---|---|---|---|---|---|
+> | `m0` | 202.5 mm | 379,918 | 1.40e-1 | 0.9 | 0.02835 | **±3.0 %** |
+> | `m1` control | 50.6 mm | 1,064,691 | **2.70e-1** | 0.6 | 0.02724 | **±18.2 %** |
+> | `m1 --jetRefine` | 12.7 mm | 1,334,627 | 1.40e-1 | 0.9 | 0.02625 | **±6.5 %** |
+>
+> **Refining did not help — it is non-monotone, and m1 is the worst of the three.** None gets
+> within four orders of the 1e-5 `residualControl` target.
+>
+> What *does* behave: the tray **mean** spans only **8 %** across that 16× resolution range,
+> i.e. it is mesh-converged. It is the **fluctuation** that moves, and not monotonically —
+> because what each mesh really varies is how much *numerical damping* it applies to an
+> unsteady flow. m0's apparently-calm ±3.0 % (5 zero crossings) is coarse-cell diffusion
+> smoothing a real oscillation; m1 removes that damping and exposes ±18.2 %.
+>
+> **The flow at `Q` = 1.25 m³/h is genuinely unsteady, exactly as at 5 m³/h (§5.1). A steady
+> solver cannot converge it at any resolution.** The `Uy` 2.8e-3 vs `Ux` 2.1e-2 / `Uz` 2.6e-2
+> split — streamwise pinned by mass conservation while the cross-stream recirculation wanders
+> — is the flapping signature, not an under-resolution signature. GAMG was never the problem:
+> it reached a p **final** residual of 5.8e-4 every iteration while the **initial** residual
+> stayed at 8.0e-2. Mesh, BCs and iteration count were all eliminated first (`checkMesh` clean,
+> volume exact, mass balance **2e-10**, continuity stable, residual flat from iteration 4,533
+> to **11,150**).
+>
+> **So `x_res` tells you what resolution a faithful TRANSIENT needs. It does not predict, and
+> cannot fix, steady convergence.** `--jetRefine` is worth having for the transient — it is
+> still the cheapest route to m2-grade shear resolution — but do not reach for it expecting a
+> steady run to settle.
+>
+> **`--jetRefine` is the efficient way to BUY shear-layer resolution** — not a convergence fix
+> (see the refutation below). It adds one level on a tight box over the first ~26 mm of the
+> *inlet* jet only (an outlet is a sink with no shear layer worth resolving, §6.2), quartering
+> `x_res`:
+>
+> | | `x_res` | cells | measured |
+> |---|---|---|---|
+> | `m1` | 50.6 mm | 1,064,691 | — |
+> | **`m1 --jetRefine`** | **12.7 mm** | **1,334,627** | **+25.4 %** |
+> | `m2` | 12.7 mm | 5,967,102 | +460 % |
+>
+> **Same shear-layer resolution as m2 for 4.5× fewer cells.** Verified 2026-08-14: the
+> `--jetRefine` mesh passes `checkMesh` with total volume 2.53019e-3 m³ against `V_air`
+> 2.5302e-3, i.e. the tray slots stay open and the extra refinement costs nothing in quality.
+>
+> **This does not apply to the RANS arm** — its `ν_t` is 5× molecular (§5.2), thickening the
+> layer by √6 and hiding the problem. That is why `--jetRefine` is opt-in rather than
+> automatic: turning it on for both arms wastes cells on the RANS side, and turning it on for
+> only the laminar arm would confound the model-spread comparison. `generate_case.sh` prints
+> `x_res` for every laminar case and warns when it exceeds the chamber depth.
+>
+> **Do not "fix" this with `bounded Gauss upwind`.** It would converge, by adding numerical
+> diffusion to a jet whose measured problem is already too much diffusion — trading a visible
+> failure for an invisible one. See the note in `fvSchemes`.
 - **The tray side slots are the tightest feature in the mesh, and they are open.** The tray is
   flush with the floor only, so each 2.5 mm × 2.5 cm × 12.5 cm side slot is a real flow path.
   At base resolution that is 1.5 cells (m2) / 3 cells (m3) across — **not resolvable**.
@@ -776,8 +1054,42 @@ at `y⁺` ≈ 5–15, say so rather than quietly reporting wall heat flux as if 
 - **Always** `checkMesh` after. Non-orthogonality < 65 and skewness < 4 before proceeding;
   set `nNonOrthogonalCorrectors` to match what you actually got.
 - `renumberMesh -overwrite` before `decomposePar` (§3.3).
-- Mesh independence study is mandatory before any published number — 3 levels, ~1.5–2×
-  cell count each, tracked in `validation/`.
+- Mesh independence study is mandatory before any published number — 3 levels, tracked in
+  `validation/`. **Done for Phase 1: `m0`/`m1`/`m2`, see `validation/mesh_independence.md`.**
+  The ladder runs *downward* because `m3` is not buildable; the cell-count ratios are 2.8×
+  and 5.6× (linear `r` = 1.41 and 1.77), comfortably past the ~1.5–2× this line used to ask
+  for.
+
+> ### ⚠ MEASURED 2026-08-14 — the mesh is not the limiting error at Q = 5 m³/h
+>
+> m0 (380 k) vs m1 (1.07 M), averaged over iterations 1500–4000 (~2 oscillation periods):
+>
+> | metric | m0 | m1 | mesh diff | temporal fluctuation (1σ) |
+> |---|---|---|---|---|
+> | **tray mean speed** [m/s] | 0.252112 | 0.251422 | **0.3 %** | **±3.6 %** |
+> | **tray CoV** (uniformity) | 0.457004 | 0.466248 | **2.0 %** | **±7.9 %** |
+> | tray slot flux [m³/s] | −3.878e-6 | −3.153e-6 | 23.0 % | ±12.3 % |
+> | slot split, % of `Q` | 0.279 % | 0.227 % | | |
+>
+> **On the two tray metrics this project reports, the discretisation error between 380 k and
+> 1.07 M cells is 4–12× smaller than the unsteadiness it sits inside.** Refining further does
+> not buy a better answer — it buys a more precise number for a quantity whose true value
+> oscillates by an order of magnitude more. `y+` supports this: area-averages at m0 are
+> floor 0.30 / walls 0.74 / hood 0.93 / tray 1.21, all still viscous sublayer.
+>
+> **Consequence: run the transient at `m0`.** See §5.1 for the cost table.
+>
+> Four things this does *not* establish, all of which matter:
+> 1. **It is not a GCI.** These are SIMPLE-*iteration* averages of a run that never converged,
+>    because the flow is unsteady here. Iterations are not time. Strong indicator, not proof —
+>    the rigorous version needs transient time-averages.
+> 2. **It does not test slot resolution.** m0 and m1 both resolve the slots at 0.833 mm; that
+>    was forced, to keep them open at all. Everything *except* the slots is varied.
+> 3. **The slot flux is genuinely mesh-sensitive** (23 %). Anything depending on the slots
+>    needs m1 or finer.
+> 4. **Phase 2 is not covered.** The hood carries the LED load and its `y+` doubles at m0
+>    (0.49 → 0.93). Wall heat flux is far more mesh-sensitive than tray velocity — re-check
+>    there rather than carrying the m0 verdict across.
 
 **Target sizes on this machine:** 1–3 M cells is comfortable and fast (minutes to ~an hour
 steady). 5–10 M is a production run. RAM allows far more (~1 GB/M cells for steady
@@ -823,6 +1135,24 @@ foamDictionary -entry value -set "(0 0 -1.635)" constant/g
   Useful ones for this project: `age` (mean age of air = **ventilation effectiveness, the
   key chamber metric**), `fieldMinMax`, `volFieldValue`, `surfaceFieldValue` (flow balance
   at ports), `streamlines`, `wallShearStress`, `yPlus`, `comfort`.
+
+> **⚠ `age` is the exception — it is a STEADY function object.** It solves a steady transport
+> equation on whatever `phi` is current, so firing it at `writeTime` in a transient run answers
+> "what age field would this flow have if this instant's velocity persisted forever". On a
+> flapping jet successive snapshots disagree and none of them is the answer.
+>
+> It is therefore **removed from `templates/transient/system/controlDict`** (2026-08-14). The
+> mean age is a mean-flow property, evaluated once, post-hoc, on the time-averaged flux — which
+> is exactly why `functions/transientMonitors` averages `phi`. Recipe:
+>
+> ```bash
+> cd runs/<case> && ls -d [0-9]*        # pick the final time
+> cp <T>/phiMean <T>/phi                # age reads phi
+> postProcess -func age -time <T>
+> ```
+>
+> The `age` solver entry stays in `fvSolution`; `postProcess` needs it. Secondary benefit: at
+> `writeInterval` 0.5 over 12 s that was 24 transport solves per run, all discarded.
 - `#include "system/functions/..."` from `controlDict` rather than inlining.
 - Check `etc/caseDicts/postProcessing/` for ready-made snippets before writing one.
 - ParaView 5.11.2 for 3D; read the case directly with the OpenFOAM reader (`paraFoam`),
@@ -863,13 +1193,26 @@ of the flank.
 
 | # | Open item | Working value | Where |
 |---|---|---|---|
-| 1 | **LD3007MS Δp–Q curve** — 5 m³/h is free air, delivered flow is likely well below it | sweep **5 / 2.5 / 1.25 m³/h**, report everything vs `Q` | §6.2 |
+| 1 | **LD3007MS Δp–Q curve** — 5 m³/h is free air, delivered flow is likely well below it | **`Q` = 1.25 m³/h** as of 2026-08-14 (was 5); still sweep 5 / 2.5 / 1.25 and report everything vs `Q` | §6.2 |
 | 2 | **LED duty / brightness** | **38.4 W (50 % white)** — thermally non-viable, see the warning | §6.3 |
+| 3 | **Turbulence model at `Q` = 1.25** — `Re_port` = 1458 is **laminar**, but the default is still `kOmegaSST` | run the pair, `--model laminar` and `--model kOmegaSST`, report the spread | §5.2 |
 
-Both are **noted, not resolved.** Item 1 changes the turbulence regime (§5.2) and every mixing
-metric; item 2 makes the absolute temperatures unphysical while leaving the flow structure
-informative. Neither blocks Phase 1. Every run's `NOTES.md` must state which working value it
+All three are **noted, not resolved.** Item 1 changes the turbulence regime (§5.2) and every
+mixing metric; item 2 makes the absolute temperatures unphysical while leaving the flow
+structure informative; item 3 follows directly from item 1 and is now live rather than
+hypothetical. None blocks Phase 1. Every run's `NOTES.md` must state which working value it
 used, and no figure derived from them goes out without the caveat on it.
+
+> **Why the default moved to 1.25 m³/h (2026-08-14).** 5 m³/h is the **free-air** rating at
+> zero back-pressure. This chamber presents ≳ 30 Pa (§6.2), at or beyond a 30 mm axial fan's
+> likely shut-off, and the fan is blowing into a hole 44 % of its face area — so the delivered
+> flow is "plausibly half or less". 1.25 is the bottom rung of the ladder and the most likely
+> of the three to bracket the real operating point. It is also the cheapest to run, by a lot:
+> Δt scales as 1/`U`, so a transient costs 2.3 h at m1 against 9.1 h at 5 m³/h, and the flow
+> may well settle *steady* at this rung (§5.1), which is another ~10× on top.
+>
+> **This is a better-motivated placeholder, not a measurement.** `generate_case.sh` now warns
+> when `Re_port` lands in the laminar or transitional band with a turbulent closure selected.
 
 ### 10.3 Resolved
 
@@ -894,6 +1237,21 @@ used, and no figure derived from them goes out without the caveat on it.
 | LED panel | **WS2812B 16×16**, 160 × 160 mm, 0.0256 m², max 76.8 W; negligible thickness | 2026-08-13 |
 | CAD/STL needed? | **No** — fully parametric `blockMesh` + `snappyHexMesh` | 2026-08-13 |
 | Turbulence model | **still open** — depends on delivered `Q`; see §5.2 table | 2026-08-13 |
+| **Is the flow steady at `Q` = 5 m³/h?** | **No.** Confined jet flapping; `simpleFoam` will not converge. Use `--transient`. See §5.1 | 2026-08-14 |
+| `y⁺` regime | **Viscous sublayer, not the buffer band** — area-averages 0.35–1.24 at m1/5 m³/h. §7's warning is pessimistic | 2026-08-14 |
+| Tray side-slot flow split | **≈ 0.23 % of `Q`** (steady m1, provisional — confirm on the transient). Under §7's 1 % threshold for dropping the level-2 slot refinement at m3 | 2026-08-14 |
+| Concave cells in `checkMesh -allGeometry` | **Accepted, not a defect** — the test flags planar as well as folded cells at a 1e-6 tolerance and is excluded from default `checkMesh`. Max cell openness 5e-16. `Allrun` gates on the standard pass | 2026-08-14 |
+| Does the two-box `traySlots` rewrite save cells? | **No — 0.49 %**, not "substantially". Controlled A/B at m1. The cells are in `refinementSurfaces` (+531 k) and layers (+302 k, +39 %). See §7 | 2026-08-14 |
+| Coarsest mesh that divides the geometry exactly | **`m1`** — GCD of the internal dims is exactly the m1 base cell. `m0` is 2.2 % anisotropic in z and that is fine | 2026-08-14 |
+| Mesh-independence ladder | **`m0`/`m1`/`m2`, running downward** (`r` = 1.41, 1.77). `m3` (~33 M) is not buildable against the 20 M cap | 2026-08-14 |
+| Is the mesh the limiting error on the tray metrics? | **No.** m0 vs m1 differ by 0.3 % (mean speed) and 2.0 % (CoV) against ±3.6 % / ±7.9 % temporal fluctuation. Run the transient at m0. See §9.6 | 2026-08-14 |
+| Is a transient at `m2` affordable? | **No — ~102 h.** m2 pays 5.6× per step *and* 2× the steps. Transient work is m0/m1 only. See §5.1 | 2026-08-14 |
+| Working flow rate | **1.25 m³/h** (was 5). Bottom rung of the ladder; 5 is free air, an upper bound. Placeholder, not a measurement. See §10.2 | 2026-08-14 |
+| **Is `Q` = 1.25 m³/h steady?** | **No — the chamber flaps at BOTH ends of the ladder.** 4 steady runs (m0 to 11,150 iters, m1, m1+jetRefine, kOmegaSST), none converges. Phase 1 is `pimpleFoam` at every `Q`. See §5.1 | 2026-08-14 |
+| Why does the laminar arm stall at `Q` = 1.25? | **Genuine unsteadiness.** The shear-layer-resolution hypothesis was tested across a 16× `x_res` range and **refuted** — p plateau went 1.4e-1 / 2.7e-1 / 1.4e-1, non-monotone. Mesh, BCs, iteration count all eliminated first. See §7 | 2026-08-14 |
+| Does a coarse mesh make the flow look steadier than it is? | **Yes, badly.** m0 reports ±3.0 % tray fluctuation where m1 reports ±18.2 % — coarse-cell numerical diffusion damping a real oscillation. The *mean* is mesh-converged to 8 %; the fluctuation is not | 2026-08-14 |
+| Is `kOmegaSST`'s clean convergence at `Q` = 1.25 meaningful? | **No.** Measured `ν_t` = 5× molecular ⇒ `ν_eff`/`ν` = 6, `Re_eff` = 242 not 1458. It converges because it solves a 6× more viscous problem. See §5.2 | 2026-08-14 |
+| Largest error bar in the project | **Turbulence model, 89 %** on tray mean speed at `Q` = 1.25 (laminar 0.0288 vs kOmegaSST 0.0545 m/s) — vs 0.3 % mesh and ±3.6 % temporal | 2026-08-14 |
 ### 10.4 Needed later, not blocking anything now
 
 7. **Gravity regimes of interest** — which values beyond 1 g, and what is the physical context

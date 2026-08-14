@@ -128,25 +128,50 @@ MESHCELLS=$(sed -n 's/^ *cells: *\([0-9][0-9]*\).*/\1/p' log.checkMesh | head -1
 # NPROCS from decomposeParDict this adapts on its own if the rank count changes.
 MINPERRANK=50000
 
-if [ "$MESHCELLS" -lt $((NPROCS * MINPERRANK)) ]; then
-    echo "== ${MESHCELLS} cells: below ${MINPERRANK}/rank on $NPROCS ranks, solving serial"
+# HALVE the rank count until the floor is met, rather than falling straight from
+# $NPROCS to serial. The all-or-nothing version threw away most of the machine on
+# any mesh between 50 k and 400 k cells: measured 2026-08-14, the 380 k-cell m0
+# rung failed the 8-rank test (needs 400 k) and went SERIAL at ~1 s/iteration,
+# when 4 ranks gives it 95 k cells/rank -- comfortably above the floor, and the
+# CLAUDE.md 3.2 tier table asks for exactly 4 ranks below 0.5 M anyway.
+#
+# Halving, not $((MESHCELLS / MINPERRANK)), so the count stays a power of two and
+# keeps landing on whole CCD0 core groups (CLAUDE.md 3.2).
+SOLVERANKS=$NPROCS
+while [ "$SOLVERANKS" -gt 1 ] && [ "$MESHCELLS" -lt $((SOLVERANKS * MINPERRANK)) ]; do
+    SOLVERANKS=$((SOLVERANKS / 2))
+done
+
+if [ "$SOLVERANKS" -le 1 ]; then
+    echo "== ${MESHCELLS} cells: below ${MINPERRANK} even on 2 ranks, solving serial"
 else
-    echo "== ${MESHCELLS} cells: solving on $NPROCS ranks ($((MESHCELLS / NPROCS)) cells/rank)"
+    echo "== ${MESHCELLS} cells: solving on $SOLVERANKS ranks ($((MESHCELLS / SOLVERANKS)) cells/rank)"
+    [ "$SOLVERANKS" -ne "$NPROCS" ] && \
+        echo "   (decomposeParDict says $NPROCS; reduced to hold >=${MINPERRANK} cells/rank)"
+    # decomposePar reads this, so it has to actually change -- not just the label.
+    foamDictionary -entry numberOfSubdomains -set "$SOLVERANKS" system/decomposeParDict > /dev/null
 fi
 
 # CLAUDE.md 1.4 -- 0.orig is the source of truth. 0/ is a copy made here.
 restore0Dir
 
 solve_ok=1
-if [ "$MESHCELLS" -lt $((NPROCS * MINPERRANK)) ]; then
+if [ "$SOLVERANKS" -le 1 ]; then
     runApplication "$APP" || solve_ok=0
 else
     # -force: the mesh changed under snappy and processor*/ was removed above.
     # Separate log suffix, or runApplication would see log.decomposePar from the
     # meshing stage and silently skip this -- leaving no fields to solve on.
     runApplication -s fields decomposePar -force
-    runPinned "$NPROCS" "$APP" || solve_ok=0
-    runApplication reconstructPar -latestTime
+    runPinned "$SOLVERANKS" "$APP" || solve_ok=0
+
+    # A steady run only has one meaningful time; a transient one has a history,
+    # and -latestTime would silently throw it away. Match the solver by name --
+    # NOT a `*impleFoam` glob, which also matches simpleFoam.
+    case "$APP" in
+        pimpleFoam|buoyantPimpleFoam) runApplication reconstructPar ;;
+        *)                            runApplication reconstructPar -latestTime ;;
+    esac
 fi
 
 # runApplication does not propagate the solver's exit status, so without this

@@ -1,0 +1,114 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+| Transient-only monitors -- the things a steady run cannot produce             |
+|                                                                              |
+| The whole point of the transient run is that the answer is a TIME AVERAGE     |
+| plus a fluctuation level, not a single converged number. Two mechanisms:      |
+|                                                                              |
+|   fieldAverage   time-averaged FIELDS, for the mean-flow picture and figures  |
+|   traySignal     the tray metric at EVERY time step, for the time series      |
+|                  (mean, RMS, and the flapping frequency by FFT)               |
+|                                                                              |
+| `timeStart` on both discards the start-from-rest transient. It is set by      |
+| scripts/generate_case.sh, not hand-edited -- averaging over the startup is    |
+| the classic way to get a confidently wrong mean.                              |
+\*---------------------------------------------------------------------------*/
+
+fieldAverage
+{
+    type            fieldAverage;
+    libs            (fieldFunctionObjects);
+
+    timeStart       __AVG_START__;
+
+    writeControl    writeTime;
+
+    // prime2Mean gives the variance, so the mean is reported with a
+    // fluctuation level rather than as a bare number.
+    fields
+    (
+        U
+        {
+            mean        on;
+            prime2Mean  on;
+            base        time;
+        }
+        p
+        {
+            mean        on;
+            prime2Mean  on;
+            base        time;
+        }
+        // Averaged flux, so the mean-flow age of air can be evaluated
+        // post-hoc on a divergence-free mean field rather than on a snapshot.
+        phi
+        {
+            mean        on;
+            prime2Mean  off;
+            base        time;
+        }
+    );
+}
+
+// The tray metric, sampled EVERY time step.
+//
+// Deliberately separate from `trayPlane` in functions/trayMetrics, which
+// samples every 20 steps: that rate is right for watching a steady run settle
+// and far too coarse to resolve a flapping jet. At the expected dt ~ 1e-3 s
+// this samples at ~1 kHz, which is Nyquist-safe well past the jet-column
+// frequency (St ~ 0.3 on D = 20 mm at 4.42 m/s gives ~66 Hz).
+//
+// Same plane and bounds as trayPlane so the two are directly comparable.
+traySignal
+{
+    type            surfaceFieldValue;
+    libs            (fieldFunctionObjects);
+    writeControl    timeStep;
+    writeInterval   1;
+    log             false;          // every step -- do NOT put this in the log
+    writeFields     false;
+    regionType      sampledSurface;
+    name            trayTop;
+    sampledSurfaceDict
+    {
+        type        plane;
+        planeType   pointAndNormal;
+        pointAndNormalDict
+        {
+            point   (0.06 0.0933 0.030);
+            normal  (0 0 1);
+        }
+        bounds      (0.0025 0.0308 0) (0.1175 0.1558 1);
+        interpolate true;
+    }
+    operation       areaAverage;
+    fields          (mag(U));
+}
+
+// Point probes in the jet path -- the most direct evidence of flapping.
+// A jet that oscillates laterally shows as an anti-phase signal between the
+// two off-axis probes, which an area average over the tray cannot reveal.
+//
+//   1  port mouth, 1 diameter in     -- the jet core
+//   2  mid-chamber on the axis       -- has the jet reached here?
+//   3  mid-chamber, +30 mm in x      -- off-axis, pairs with 4
+//   4  mid-chamber, -30 mm in x      -- off-axis, anti-phase if it flaps
+//   5  hood interior                 -- the dead volume (CLAUDE.md 6.1)
+jetProbes
+{
+    type            probes;
+    libs            (sampling);
+    writeControl    timeStep;
+    writeInterval   1;
+    log             false;
+    fields          (U p);
+    probeLocations
+    (
+        (0.060 0.0200 0.0667)
+        (0.060 0.0933 0.0667)
+        (0.090 0.0933 0.0667)
+        (0.030 0.0933 0.0667)
+        (0.060 0.0933 0.1200)
+    );
+}
+
+// ************************************************************************* //
