@@ -1,7 +1,10 @@
 #!/bin/sh
 cd "$(dirname "$0")" || exit 1
 
-. /usr/bin/openfoam2606
+# NOTE: etc/bashrc, not /usr/bin/openfoam2606 -- the latter execs an interactive
+# session and discards the rest of this script. See Allrun.
+# shellcheck disable=SC1091
+. /usr/lib/openfoam/openfoam2606/etc/bashrc
 # shellcheck disable=SC1091
 . "$WM_PROJECT_DIR/bin/tools/CleanFunctions"
 

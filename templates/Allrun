@@ -2,12 +2,31 @@
 cd "$(dirname "$0")" || exit 1
 
 # CLAUDE.md 2 -- ~/.bashrc does not source OpenFOAM. Every script activates it.
-. /usr/bin/openfoam2606
+#
+# NOTE: source etc/bashrc, NOT /usr/bin/openfoam2606. The latter is
+# `exec .../etc/openfoam`, which REPLACES this shell with an interactive
+# OpenFOAM session -- sourcing it silently discards the rest of the script.
+# shellcheck disable=SC1091
+. /usr/lib/openfoam/openfoam2606/etc/bashrc
 
 # shellcheck disable=SC1091
 . "$WM_PROJECT_DIR/bin/tools/RunFunctions"
 
 APP=$(getApplication)
+
+# CLAUDE.md 3.2 -- pin to physical cores. RunFunctions' runParallel calls
+# `mpirun --oversubscribe` with no binding at all; unpinned ranks get migrated
+# across CCDs and lose the L3 they warmed, which is the whole point of the
+# V-cache die. Use this instead of runParallel.
+runPinned()
+{
+    _np=$1 ; _app=$2 ; shift 2
+    _log="log.$_app"
+    [ -f "$_log" ] && { echo "$_app already run: remove $_log to re-run"; return 0; }
+    echo "Running $_app ($_np ranks, pinned to cores 0-$((_np - 1))) on $PWD"
+    mpirun --cpu-set "0-$((_np - 1))" --bind-to core -np "$_np" \
+        "$_app" "$@" -parallel </dev/null > "$_log" 2>&1
+}
 
 # ---------------------------------------------------------------------------
 # Geometry. Generated analytically -- there is no CAD input (CLAUDE.md 6.1).
@@ -26,18 +45,25 @@ runApplication blockMesh
 runApplication surfaceFeatureExtract
 
 NPROCS=$(foamDictionary -entry numberOfSubdomains -value system/decomposeParDict)
-NCELLS=$(foamDictionary -entry blocks -value system/blockMeshDict 2>/dev/null | \
-         tr -dc '0-9 ' | awk '{print $2*$3*$4}')
+
+# Background cell count, straight from the resolution entries. Do NOT try to
+# parse the `blocks` entry -- the leading `hex (0 1 2 3 4 5 6 7)` vertex list
+# makes any positional field extraction pick up the vertex labels instead.
+NX=$(foamDictionary -entry nx -value system/blockMeshDict)
+NY=$(foamDictionary -entry ny -value system/blockMeshDict)
+NZ=$(foamDictionary -entry nz -value system/blockMeshDict)
+NCELLS=$((NX * NY * NZ))
 
 # CLAUDE.md 3.2 -- keep >= 50 k cells/rank. m1 is too small to decompose.
-if [ "${NCELLS:-0}" -lt 200000 ]; then
+if [ "$NCELLS" -lt 200000 ]; then
     echo "== small mesh (${NCELLS} background cells): meshing serial"
     runApplication snappyHexMesh -overwrite
 else
-    runApplication decomposePar -copyZero
-    # CLAUDE.md 3.2 -- always --bind-to core. Unpinned ranks migrate across CCDs
-    # and lose the L3 they warmed.
-    runParallel -np "$NPROCS" snappyHexMesh -overwrite -parallel
+    echo "== ${NCELLS} background cells: meshing on $NPROCS ranks"
+    # -no-fields: there is no 0/ yet (restore0Dir runs after the mesh is built),
+    # so there is nothing to decompose but the mesh.
+    runApplication -s mesh decomposePar -no-fields
+    runPinned "$NPROCS" snappyHexMesh -overwrite
     runApplication reconstructParMesh -constant
     rm -rf processor*
 fi
@@ -66,11 +92,14 @@ fi
 # CLAUDE.md 1.4 -- 0.orig is the source of truth. 0/ is a copy made here.
 restore0Dir
 
-if [ "${NCELLS:-0}" -lt 200000 ]; then
+if [ "$NCELLS" -lt 200000 ]; then
     runApplication "$APP"
 else
-    runApplication decomposePar
-    runParallel -np "$NPROCS" "$APP"
+    # -force: the mesh changed under snappy and processor*/ was removed above.
+    # Separate log suffix, or runApplication would see log.decomposePar from the
+    # meshing stage and silently skip this -- leaving no fields to solve on.
+    runApplication -s fields decomposePar -force
+    runPinned "$NPROCS" "$APP"
     runApplication reconstructPar -latestTime
 fi
 

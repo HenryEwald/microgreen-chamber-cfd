@@ -41,7 +41,11 @@ done
 CASE="$ROOT/runs/$NAME"
 [ -e "$CASE" ] && { echo "runs/$NAME already exists -- remove it first" >&2 ; exit 1 ; }
 
-. /usr/bin/openfoam2606
+# etc/bashrc, not /usr/bin/openfoam2606 -- the latter is `exec .../etc/openfoam`
+# and replaces this shell with an interactive session, silently discarding
+# everything below. Verified 2026-08-14.
+# shellcheck disable=SC1091
+. /usr/lib/openfoam/openfoam2606/etc/bashrc
 
 mkdir -p "$ROOT/runs"
 cp -r "$ROOT/templates" "$CASE"
