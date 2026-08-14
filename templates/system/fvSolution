@@ -45,6 +45,20 @@ solvers
         tolerance       1e-8;
         relTol          0.01;
     }
+
+    // Mean age of air (functions/age). The FO solves its own transport equation
+    // at write time and looks the solver up by the name of `schemesField`, so
+    // this entry is mandatory -- without it the solver dies at the first write,
+    // not at startup. Kept out of the "(U|k|omega|e|h)" regex deliberately: it
+    // is solved once per write, so it can afford to be driven to a tight
+    // tolerance in one shot (relTol 0) rather than the loose per-iteration 0.1.
+    age
+    {
+        solver          PBiCGStab;
+        preconditioner  DILU;
+        tolerance       1e-6;
+        relTol          0;
+    }
 }
 
 SIMPLE

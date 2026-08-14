@@ -61,6 +61,9 @@ TRAY_Y0 = (DEPTH - TRAY_D) / 2.0          # 0.0308335
 TRAY_X1, TRAY_Y1 = TRAY_X0 + TRAY_W, TRAY_Y0 + TRAY_D
 
 PORT_SEGMENTS = 64       # tessellation of the circular port openings
+BOUNDARY_DS = 0.001      # vertex spacing on the cross-section boundary (1 mm),
+#                          chosen to match the port ring (2*pi*10/64 = 0.98 mm)
+#                          and the hood profile (152.8/200 = 0.76 mm)
 
 TWO_PI = 2.0 * math.pi
 
@@ -108,22 +111,39 @@ def hood_profile(n):
     return out
 
 
-def cross_section(profile):
+def samples(a, b, ds):
+    """Evenly spaced values from a to b inclusive, step <= ds."""
+    n = max(1, int(math.ceil(abs(b - a) / ds)))
+    return [a + (b - a) * i / n for i in range(n + 1)]
+
+
+def cross_section(profile, xs, zsL, zsR):
     """Closed CCW polygon of the chamber cross-section in the (x, z) plane.
 
-    Floor, up the right wall, back along the hood, down the left wall. The
-    region is CONVEX (a rectangle capped by a concave curve), which is what
-    makes the star-shaped triangulation below valid.
+    Floor, up the right wall, back along the hood, down the left wall.
+
+    The straight edges are DENSIFIED to roughly the same vertex spacing as the
+    hood profile and the port ring. Two reasons, both load-bearing:
+
+      * the end wall is triangulated by zipping this loop against the port ring
+        (write_end_wall). If the loop were four long edges, every ring vertex in
+        a sector would fan back to one distant corner and the annulus would come
+        out as ~70:1 slivers.
+      * the floor / side walls / hood are built from exactly these same sample
+        points, so the end wall shares every boundary vertex with its
+        neighbours. That is what makes the shell watertight -- inserting points
+        on the end wall that the adjoining surfaces do not have leaves a
+        T-junction and an open edge on every one of them.
+
+    The region is CONVEX (a rectangle capped by a concave curve) and the port
+    centre is strictly inside it, so angles about the port centre increase
+    monotonically along this loop. write_end_wall relies on that.
     """
-    poly = [(0.0, 0.0), (WIDTH, 0.0), (WIDTH, profile[-1][1])]
-    poly += [(x, z) for x, z in reversed(profile[1:-1])]
-    poly += [(0.0, profile[0][1])]
-    # drop duplicates
-    clean = [poly[0]]
-    for p in poly[1:]:
-        if math.hypot(p[0] - clean[-1][0], p[1] - clean[-1][1]) > 1e-12:
-            clean.append(p)
-    return clean
+    poly = [(x, 0.0) for x in xs]                          # floor, left -> right
+    poly += [(WIDTH, z) for z in zsR[1:]]                  # right wall, up
+    poly += [(x, z) for x, z in reversed(profile[:-1])]    # hood, right -> left
+    poly += [(0.0, z) for z in reversed(zsL[1:-1])]        # left wall, down
+    return poly
 
 
 # ---------------------------------------------------------------------------
@@ -156,100 +176,94 @@ def port_ring(n):
 # ---------------------------------------------------------------------------
 # End wall: convex polygon with a circular hole.
 #
-# The cross-section is convex, so it is star-shaped about the port centre. That
-# lets us build a watertight annulus without a general polygon triangulator:
+# Both loops are star-shaped about the port centre and are given CCW, so the
+# angle about that centre increases monotonically along each. That reduces the
+# annulus to a two-pointer merge ("zip"): walk both loops together in angle
+# order, at each step advancing whichever is behind and emitting one triangle.
 #
-#   1. cast a ray from the port centre through every ring vertex onto the
-#      polygon boundary  -> one outer point per ring vertex, at the same angle
-#   2. merge those with the polygon's own vertices and sort by angle
-#   3. walk the merged loop, fanning each outer edge back to the ring vertex
-#      that currently "owns" that angular sector, and closing the sector when
-#      the owner advances
-#
-# Every outer edge and every ring edge is used exactly once, so the result is
-# closed by construction.
+# Every outer edge and every ring edge is consumed exactly once and NO new
+# vertices are introduced, so the wall is watertight against its neighbours by
+# construction -- which is precisely what the previous ray-casting version got
+# wrong.
 # ---------------------------------------------------------------------------
-def _ang(p):
-    return math.atan2(p[1] - PORT_Z, p[0] - PORT_X) % TWO_PI
+def _unwrap(p, a0):
+    """Angle of p about the port centre, measured CCW from a0, in [0, 2*pi)."""
+    return (math.atan2(p[1] - PORT_Z, p[0] - PORT_X) - a0) % TWO_PI
 
 
-def _ray_hit(poly, dx, dz):
-    """First boundary hit of the ray from the port centre in direction (dx,dz)."""
-    best = None
-    n = len(poly)
-    for i in range(n):
-        x1, z1 = poly[i]
-        x2, z2 = poly[(i + 1) % n]
-        ex, ez = x2 - x1, z2 - z1
-        den = dx * ez - dz * ex
-        if abs(den) < 1e-18:
-            continue
-        rx, rz = x1 - PORT_X, z1 - PORT_Z
-        t = (rx * ez - rz * ex) / den        # along the ray
-        u = (rx * dz - rz * dx) / den        # along the edge
-        if t > 1e-12 and -1e-9 <= u <= 1 + 1e-9:
-            if best is None or t < best:
-                best = t
-    if best is None:
-        raise RuntimeError("ray from port centre escaped the cross-section -- "
-                           "the port does not lie inside the wall")
-    return (PORT_X + best * dx, PORT_Z + best * dz)
+def write_end_wall(f, y, reverse, poly, ring):
+    """Triangulate the pierced end wall at y.
 
+    `reverse` flips the winding. A triangle wound CCW in the (x, z) plane has
+    normal -y, which is outward at y = 0; the wall at y = DEPTH needs the
+    opposite.
+    """
+    a0 = math.atan2(poly[0][1] - PORT_Z, poly[0][0] - PORT_X)
+    uo = [_unwrap(p, a0) for p in poly]
+    uo[0] = 0.0
 
-def write_end_wall(f, y, flip, poly, ring):
-    nr = len(ring)
+    # rotate the ring so its unwrapped angles are ascending too
+    ur = [_unwrap(p, a0) for p in ring]
+    k = min(range(len(ring)), key=lambda i: ur[i])
+    ring = ring[k:] + ring[:k]
+    ur = ur[k:] + ur[:k]
 
-    merged = []
-    for i, r in enumerate(ring):
-        q = _ray_hit(poly, r[0] - PORT_X, r[1] - PORT_Z)
-        merged.append((_ang(r), q, i))
-    for p in poly:
-        merged.append((_ang(p), p, None))
-    merged.sort(key=lambda t: (t[0], 0 if t[2] is not None else 1))
-
-    # rotate so the loop starts on a ring-owned entry
-    start = next(k for k, t in enumerate(merged) if t[2] is not None)
-    merged = merged[start:] + merged[:start]
+    N, M = len(poly), len(ring)
 
     def to3(p):
         return (p[0], y, p[1])
 
-    written, owner = 0, merged[0][2]
-    n = len(merged)
-    for k in range(n):
-        _, qa, _ = merged[k]
-        _, qb, ib = merged[(k + 1) % n]
-        r_own = to3(ring[owner])
-        if flip:
-            written += facet(f, r_own, to3(qb), to3(qa))
+    def emit(a, b, c):
+        return facet(f, a, c, b) if reverse else facet(f, a, b, c)
+
+    written = 0
+    i = j = 0
+    while i < N or j < M:
+        nxt_o = uo[i + 1] if i + 1 < N else TWO_PI
+        nxt_r = ur[j + 1] if j + 1 < M else TWO_PI
+        if j >= M or (i < N and nxt_o <= nxt_r):
+            # consume one outer edge
+            written += emit(to3(poly[i]), to3(poly[(i + 1) % N]),
+                            to3(ring[j % M]))
+            i += 1
         else:
-            written += facet(f, r_own, to3(qa), to3(qb))
-        if ib is not None:                       # sector handover
-            if flip:
-                written += facet(f, r_own, to3(ring[ib]), to3(qb))
-            else:
-                written += facet(f, r_own, to3(qb), to3(ring[ib]))
-            owner = ib
+            # consume one ring edge (traversed CW as seen from the annulus)
+            written += emit(to3(poly[i % N]), to3(ring[(j + 1) % M]),
+                            to3(ring[j % M]))
+            j += 1
     return written
 
 
 # ---------------------------------------------------------------------------
-def write_chamber(path, profile):
+def write_chamber(path, profile, ds=BOUNDARY_DS):
+    """Write the closed fluid-domain shell. Normals point OUT of the fluid."""
     ring = port_ring(PORT_SEGMENTS)
-    poly = cross_section(profile)
     zL, zR = profile[0][1], profile[-1][1]
+
+    # Shared boundary samples. The end walls, the floor, the side walls and the
+    # hood all key off these, so every seam has matching vertices on both sides.
+    xs = samples(0.0, WIDTH, ds)
+    zsL = samples(0.0, zL, ds)
+    zsR = samples(0.0, zR, ds)
+    poly = cross_section(profile, xs, zsL, zsR)
+
     nf = 0
     with open(path, "w") as f:
         f.write("solid floor\n")
-        nf += quad(f, (0, 0, 0), (0, DEPTH, 0), (WIDTH, DEPTH, 0), (WIDTH, 0, 0))
+        for i in range(len(xs) - 1):
+            nf += quad(f, (xs[i], 0, 0), (xs[i], DEPTH, 0),
+                       (xs[i + 1], DEPTH, 0), (xs[i + 1], 0, 0))
         f.write("endsolid floor\n")
 
         f.write("solid walls\n")
-        nf += quad(f, (0, 0, 0), (0, 0, zL), (0, DEPTH, zL), (0, DEPTH, 0))
-        nf += quad(f, (WIDTH, 0, 0), (WIDTH, DEPTH, 0),
-                   (WIDTH, DEPTH, zR), (WIDTH, 0, zR))
-        nf += write_end_wall(f, 0.0, True, poly, ring)
-        nf += write_end_wall(f, DEPTH, False, poly, ring)
+        for i in range(len(zsL) - 1):                      # x = 0, normal -x
+            nf += quad(f, (0, 0, zsL[i]), (0, 0, zsL[i + 1]),
+                       (0, DEPTH, zsL[i + 1]), (0, DEPTH, zsL[i]))
+        for i in range(len(zsR) - 1):                      # x = WIDTH, normal +x
+            nf += quad(f, (WIDTH, 0, zsR[i]), (WIDTH, DEPTH, zsR[i]),
+                       (WIDTH, DEPTH, zsR[i + 1]), (WIDTH, 0, zsR[i + 1]))
+        nf += write_end_wall(f, 0.0, False, poly, ring)    # normal -y
+        nf += write_end_wall(f, DEPTH, True, poly, ring)   # normal +y
         f.write("endsolid walls\n")
 
         f.write("solid hood\n")
@@ -260,14 +274,16 @@ def write_chamber(path, profile):
                        (x1, DEPTH, z1), (x0, DEPTH, z0))
         f.write("endsolid hood\n")
 
-        for name, y, flip in (("inlet", 0.0, True), ("outlet", DEPTH, False)):
+        # Port caps close the shell. Same outward convention as the end wall
+        # they sit in: -y at the inlet, +y at the outlet.
+        for name, y, reverse in (("inlet", 0.0, False), ("outlet", DEPTH, True)):
             f.write("solid %s\n" % name)
             c = (PORT_X, y, PORT_Z)
             for i in range(PORT_SEGMENTS):
                 a = (ring[i][0], y, ring[i][1])
                 b = (ring[(i + 1) % PORT_SEGMENTS][0], y,
                      ring[(i + 1) % PORT_SEGMENTS][1])
-                nf += facet(f, c, b, a) if flip else facet(f, c, a, b)
+                nf += facet(f, c, b, a) if reverse else facet(f, c, a, b)
             f.write("endsolid %s\n" % name)
     return nf
 
@@ -287,10 +303,23 @@ def write_tray(path):
 
 
 # ---------------------------------------------------------------------------
-def verify_closed(path):
-    """Every edge must be shared by exactly two facets, or snappy will leak."""
-    edges = defaultdict(int)
-    verts, nf = [], 0
+def verify_closed(path, expect_volume=None):
+    """Check the surface is safe to hand to snappyHexMesh.
+
+    Three independent checks, because closure alone is not enough:
+
+      1. CLOSED    -- every edge shared by exactly two facets. A hole lets
+                      snappy leak out of the domain and mesh the whole
+                      background block.
+      2. ORIENTED  -- every edge traversed once in each direction. Catches a
+                      patch whose winding is inverted relative to its
+                      neighbours, which closure cannot see.
+      3. VOLUME    -- signed volume by the divergence theorem. Positive means
+                      the normals point OUT; the magnitude cross-checks the
+                      geometry against the numbers in report().
+    """
+    half = defaultdict(int)
+    verts, nf, vol = [], 0, 0.0
     with open(path) as f:
         for line in f:
             s = line.split()
@@ -298,14 +327,35 @@ def verify_closed(path):
                 verts.append(tuple(round(float(v), 9) for v in s[1:4]))
                 if len(verts) == 3:
                     nf += 1
+                    a, b, c = verts
+                    vol += (a[0] * (b[1] * c[2] - b[2] * c[1])
+                            - a[1] * (b[0] * c[2] - b[2] * c[0])
+                            + a[2] * (b[0] * c[1] - b[1] * c[0])) / 6.0
                     for i in range(3):
-                        a, b = verts[i], verts[(i + 1) % 3]
-                        edges[(a, b) if a < b else (b, a)] += 1
+                        half[(verts[i], verts[(i + 1) % 3])] += 1
                     verts = []
-    bad = {e: c for e, c in edges.items() if c != 2}
-    status = "CLOSED" if not bad else "NOT CLOSED (%d bad edges)" % len(bad)
-    print("  %-14s %6d facets  %s" % (os.path.basename(path), nf, status))
-    return not bad
+
+    unmatched = [e for e in half if half[(e[1], e[0])] != half[e]]
+    dup = [e for e, n in half.items() if n != 1]
+    closed = not unmatched and not dup
+
+    msgs = []
+    msgs.append("CLOSED+ORIENTED" if closed else
+                "BAD (%d unmatched, %d duplicated half-edges)"
+                % (len(unmatched), len(dup)))
+    msgs.append("vol %+8.4f L" % (vol * 1e3))
+    ok = closed and vol > 0
+    if vol <= 0:
+        msgs.append("<- NEGATIVE: normals point INTO the solid")
+    if expect_volume is not None:
+        err = abs(vol - expect_volume)
+        msgs.append("(expect %.4f, err %.2e L)" % (expect_volume * 1e3, err * 1e3))
+        if err > 1e-6:                      # 1 mL
+            ok = False
+            msgs.append("<- VOLUME MISMATCH")
+
+    print("  %-14s %6d facets  %s" % (os.path.basename(path), nf, "  ".join(msgs)))
+    return ok
 
 
 def report(profile):
@@ -317,15 +367,17 @@ def report(profile):
     hood_v = area * DEPTH
     box_v = WIDTH * BOX_H * DEPTH
     tray_v = TRAY_W * TRAY_H * TRAY_D
-    v_air = box_v + hood_v - tray_v
+    shell_v = box_v + hood_v            # what chamber.stl encloses (no tray)
+    v_air = shell_v - tray_v
     print("  hood apex            %8.4f cm   (expect 14.3334)" % (max(p[1] for p in profile) * 100))
     print("  internal lip height  %8.4f cm   (expect  0.394)" % ((profile[0][1] - BOX_H) * 100))
     print("  hood x-section       %8.4f cm2  (expect 38.80)" % (area * 1e4))
     print("  hood arc length      %8.4f cm   (expect 15.28)" % (arc * 100))
     print("  V_air                %8.4f L    (expect  2.530)" % (v_air * 1e3))
-    print("  ACH @ 5 m3/h         %8.0f h-1  tau %.2f s" %
-          (5.0 / (v_air * 1000), 3600 * v_air * 1000 / 5.0))
-    return v_air
+    # v_air is in m3. ACH = Q / V_air with Q in m3/h; tau = V_air / Q in seconds.
+    print("  ACH @ 5 m3/h         %8.0f h-1  tau %.2f s   (expect 1976, 1.82)" %
+          (5.0 / v_air, 3600.0 * v_air / 5.0))
+    return shell_v, tray_v
 
 
 def main():
@@ -344,12 +396,12 @@ def main():
     write_chamber(chamber, profile)
     write_tray(tray)
     print("wrote %s (%d profile points)" % (out, args.profile_points))
-    report(profile)
+    shell_v, tray_v = report(profile)
 
     if args.verify:
-        ok = verify_closed(chamber) & verify_closed(tray)
+        ok = verify_closed(chamber, shell_v) & verify_closed(tray, tray_v)
         if not ok:
-            raise SystemExit("surface is not closed -- do not mesh with this")
+            raise SystemExit("surface failed verification -- do not mesh with this")
 
 
 if __name__ == "__main__":

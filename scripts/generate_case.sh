@@ -44,8 +44,15 @@ CASE="$ROOT/runs/$NAME"
 # etc/bashrc, not /usr/bin/openfoam2606 -- the latter is `exec .../etc/openfoam`
 # and replaces this shell with an interactive session, silently discarding
 # everything below. Verified 2026-08-14.
+# etc/bashrc is not written for `set -eu`: it reads WM_PROJECT_SITE unset, and
+# its optional `_foamEtc -config adios2/hdf5/CGAL` probes return non-zero for
+# packages this build does not ship. Under `set -e` that aborts the source
+# part-way through and bash reports `pop_var_context: head of shell_variables
+# not a function context`. Lift both flags across the source, restore after.
+set +eu
 # shellcheck disable=SC1091
 . /usr/lib/openfoam/openfoam2606/etc/bashrc
+set -eu
 
 mkdir -p "$ROOT/runs"
 cp -r "$ROOT/templates" "$CASE"
@@ -60,32 +67,49 @@ case "$MESH" in
     m3) NX=152 ; NY=232 ; NZ=180 ;;
     *)  echo "--mesh must be m1, m2 or m3" >&2 ; exit 1 ;;
 esac
-foamDictionary -entry nx -set "$NX" system/blockMeshDict > /dev/null
-foamDictionary -entry ny -set "$NY" system/blockMeshDict > /dev/null
-foamDictionary -entry nz -set "$NZ" system/blockMeshDict > /dev/null
+# NOT foamDictionary here. `foamDictionary -set` rewrites the whole file through
+# the parser, which EXPANDS $nx/$ny/$nz into `blocks (hex ... (76 116 90) ...)`
+# on the very first call -- after which setting nx/ny/nz has no effect at all
+# and every case silently comes out at the template default (m2). That would
+# have quietly voided the mesh-independence study. It also rounds the vertex
+# coordinates to writePrecision, losing the exact 10/3 mm spans. Edit in place.
+sed -i -e "s/^nx  *[0-9][0-9]*;/nx  $NX;/" \
+       -e "s/^ny  *[0-9][0-9]*;/ny  $NY;/" \
+       -e "s/^nz  *[0-9][0-9]*;/nz  $NZ;/" system/blockMeshDict
+# Fail loudly rather than silently meshing the wrong level.
+grep -q "^nx  $NX;" system/blockMeshDict \
+  && grep -q "^ny  $NY;" system/blockMeshDict \
+  && grep -q "^nz  $NZ;" system/blockMeshDict \
+  || { echo "failed to set resolution in system/blockMeshDict" >&2 ; exit 1 ; }
 
 # --- fan flow rate ----------------------------------------------------------
 # 5 m3/h is the LD3007MS FREE-AIR rating, an upper bound (CLAUDE.md 6.2).
 Q_M3S=$(awk -v q="$Q_M3H" 'BEGIN{printf "%.6e", q/3600.0}')
 U_IN=$(awk  -v q="$Q_M3S" 'BEGIN{printf "%.4f", q/3.14159265e-4}')
 RE=$(awk    -v u="$U_IN"  'BEGIN{printf "%.0f", u*0.02/1.516e-5}')
-foamDictionary -entry "boundaryField/inlet/volumetricFlowRate" -set "$Q_M3S" 0.orig/U > /dev/null
+foamDictionary -entry "boundaryField/inlet/volumetricFlowRate" -set "$Q_M3S" 0.orig/U > /dev/null 2>&1
 
 # --- gravity (CLAUDE.md 5.2) ------------------------------------------------
-foamDictionary -entry value -set "(0 0 -$GVAL)" constant/g > /dev/null
+foamDictionary -entry value -set "(0 0 -$GVAL)" constant/g > /dev/null 2>&1
 
 # --- turbulence model -------------------------------------------------------
 if [ "$MODEL" = laminar ]; then
-    foamDictionary -entry simulationType -set laminar constant/turbulenceProperties > /dev/null
+    foamDictionary -entry simulationType -set laminar constant/turbulenceProperties > /dev/null 2>&1
 else
-    foamDictionary -entry RAS/RASModel -set "$MODEL" constant/turbulenceProperties > /dev/null
+    foamDictionary -entry RAS/RASModel -set "$MODEL" constant/turbulenceProperties > /dev/null 2>&1
 fi
 
 # --- phase ------------------------------------------------------------------
 if [ "$PHASE" = 2 ]; then
     cp "$ROOT/templates/0.orig.phase2/"* 0.orig/
-    foamDictionary -entry application -set buoyantSimpleFoam system/controlDict > /dev/null
-    foamDictionary -entry "boundaryField/hood/Q" -set "$LED" 0.orig/T > /dev/null
+    # sed, not foamDictionary: controlDict carries `#include "functions/..."`
+    # directives that the parser would expand inline on rewrite, defeating the
+    # convention in CLAUDE.md 8.4.
+    sed -i "s/^application     simpleFoam;/application     buoyantSimpleFoam;/" \
+        system/controlDict
+    grep -q "^application     buoyantSimpleFoam;" system/controlDict \
+      || { echo "failed to set application in system/controlDict" >&2 ; exit 1 ; }
+    foamDictionary -entry "boundaryField/hood/Q" -set "$LED" 0.orig/T > /dev/null 2>&1
     SOLVER=buoyantSimpleFoam
 else
     SOLVER=simpleFoam
@@ -93,8 +117,8 @@ else
 fi
 
 # --- derived quantities, for the notes --------------------------------------
-V_AIR=2.530e-3
-ACH=$(awk -v q="$Q_M3H" -v v="$V_AIR" 'BEGIN{printf "%.0f", q/v/1000}')
+V_AIR=2.530e-3          # m3, NOT litres -- do not divide by 1000 again
+ACH=$(awk -v q="$Q_M3H" -v v="$V_AIR" 'BEGIN{printf "%.0f", q/v}')
 TAU=$(awk -v q="$Q_M3S" -v v="$V_AIR" 'BEGIN{printf "%.2f", v/q}')
 if [ "$PHASE" = 2 ]; then
     DT=$(awk -v p="$LED" -v q="$Q_M3S" 'BEGIN{printf "%.1f", p/(q*1.2*1004.5)}')

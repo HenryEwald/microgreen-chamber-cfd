@@ -46,7 +46,7 @@ any result is reproducible from a script plus a parameter set. Only `NOTES.md` f
 OpenFOAM is not sourced by `~/.bashrc`; every shell and script must activate it explicitly.
 
 ```bash
-. /usr/bin/openfoam2606
+. /usr/lib/openfoam/openfoam2606/etc/bashrc
 cd ~/OpenFOAM/henry-v2606/run/microgreenChamber
 ```
 

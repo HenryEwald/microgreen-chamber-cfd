@@ -55,6 +55,21 @@ outletU
 // How much air actually goes down the 2.5 mm tray side slots (CLAUDE.md 7)?
 // This is a RESULT, not an assumption. If it comes out below ~1 % of Q, the
 // level-2 slot refinement can be dropped at m3 and the study gets cheaper.
+//
+// NOT `sum` of `phi`, as inletFlux/outletFlux above do. Those are patches, which
+// carry the face flux directly; this is a sampledSurface, which INTERPOLATES
+// VOLUME fields onto a cut plane and has no access to the surfaceScalarField phi
+// -- asking for it gets only "Requested field phi not found in database and not
+// processed" and the slot split silently never gets measured. `areaNormalIntegrate`
+// on U gives sum(U & Sf) = the volumetric flow through the plane [m3/s], which is
+// the same quantity. It is reported in the x-component of the returned vector.
+//
+// Verified: the sample picks up 868 faces / 1.2519e-4 m2 at m1, i.e. exactly the
+// two 2.5 x 25 mm slots (1.25e-4 m2) -- the bounds are already right, because the
+// tray interior is not meshed, so the only fluid below z = 25 mm at mid-depth IS
+// the slots.
+//
+// Compare against |phi| at the ports: 1.3889e-3 m3/s at Q = 5 m3/h.
 traySlotFlux
 {
     type            surfaceFieldValue;
@@ -77,8 +92,8 @@ traySlotFlux
         bounds      (-1 -1 -1) (1 1 0.025);
         interpolate true;
     }
-    operation       sum;
-    fields          (phi);
+    operation       areaNormalIntegrate;
+    fields          (U);
 }
 
 // ************************************************************************* //

@@ -9,6 +9,32 @@
 | candidates: mean speed over the canopy, its uniformity, and the worst spot.   |
 \*---------------------------------------------------------------------------*/
 
+// `mag(U)` is NOT a field OpenFOAM registers on its own -- it is just a name.
+// Without this function object every consumer of it below gets a WARNING, not an
+// error ("Requested field mag(U) not found in database and not processed"), and
+// silently produces no output. That would leave trayUniformity and trayMinMax
+// completely empty and trayPlane reporting only the vector U -- i.e. the run
+// would look fine and the project's headline metric would not exist.
+//
+// Declared FIRST: function objects execute in the order they are declared, and
+// the fieldValues below consume its output in the same timestep. `mag` names its
+// result `mag(<field>)` by default, which is exactly the name they ask for.
+//
+// executeInterval 1 rather than 20: one sqrt per cell is negligible against a
+// SIMPLE iteration, and it removes any question of the interval lining up with
+// the consumers'. writeControl writeTime so the field lands in the time dirs for
+// ParaView -- ~48 MB per write at m2, against purgeWrite 3.
+magU
+{
+    type            mag;
+    libs            (fieldFunctionObjects);
+    field           U;
+    executeControl  timeStep;
+    executeInterval 1;
+    writeControl    writeTime;
+    log             false;
+}
+
 // Plane 5 mm above the tray surface -- inside a young canopy, below a mature one.
 trayPlane
 {
@@ -37,10 +63,17 @@ trayPlane
 }
 
 // Uniformity. A high mean with a high CoV is not a well-mixed chamber.
+//
+// `areaNormalisedIntegrate` does NOT exist in v2606 -- it is not in the
+// surfaceFieldValue operation enum and the solver dies on the first timestep
+// with a FATAL IO ERROR. The available spread measures are `CoV` (coefficient
+// of variation, used here because the comment above is about CoV) and
+// `uniformity` (the mixing uniformity index, 1 = perfectly uniform), which is
+// the other reasonable choice if a bounded 0-1 metric reads better on a plot.
 trayUniformity
 {
     $trayPlane;
-    operation       areaNormalisedIntegrate;
+    operation       CoV;
     fields          (mag(U));
 }
 

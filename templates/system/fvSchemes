@@ -33,6 +33,12 @@ divSchemes
     div(phi,k)      bounded Gauss limitedLinear 1;
     div(phi,omega)  bounded Gauss limitedLinear 1;
 
+    // The `age` function object builds its scheme name from `schemesField`
+    // (functions/age) as div(phi,<schemesField>). With `default none` above,
+    // omitting this is a FATAL IO ERROR at the FIRST WRITE TIME -- i.e. the
+    // solver runs for hundreds of iterations and only then dies.
+    div(phi,age)    bounded Gauss limitedLinear 1;
+
     div((nuEff*dev2(T(grad(U))))) Gauss linear;
 
     // --- Phase 2 (buoyantSimpleFoam) -------------------------------------

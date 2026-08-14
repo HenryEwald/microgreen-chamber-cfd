@@ -54,7 +54,11 @@ NY=$(foamDictionary -entry ny -value system/blockMeshDict)
 NZ=$(foamDictionary -entry nz -value system/blockMeshDict)
 NCELLS=$((NX * NY * NZ))
 
-# CLAUDE.md 3.2 -- keep >= 50 k cells/rank. m1 is too small to decompose.
+# MESHING only. This is the one decision that genuinely has to use the background
+# count, because it is taken before there is a mesh to count. snappy's own cost
+# tracks the background block closely enough for the purpose.
+#
+# Do NOT reuse it for the solve -- see the MESHCELLS block below.
 if [ "$NCELLS" -lt 200000 ]; then
     echo "== small mesh (${NCELLS} background cells): meshing serial"
     runApplication snappyHexMesh -overwrite
@@ -74,33 +78,86 @@ runApplication topoSet
 # MORE than usual on the V-cache die. Always before decomposePar.
 runApplication renumberMesh -overwrite
 
-runApplication checkMesh -allTopology -allGeometry
+# Two passes, on purpose.
+#
+#   log.checkMesh          the STANDARD checks. This is the acceptance gate.
+#   log.checkMesh.extra    -allTopology -allGeometry, for the report.
+#
+# The extra pass is informational only, because on ANY snappy mesh with layers
+# it reports `***Concave cells (using face planes)` -- 2 % of cells at m1, 1.3 %
+# at m2 -- and gating on a bare `***` grep therefore aborts every single run
+# before it solves. Concavity by face planes is a property of layer cells and
+# refinement transitions, not a defect; the standard checks are the bar
+# CLAUDE.md 7 actually names (non-orthogonality < 65, skewness < 4).
+runApplication checkMesh
+runApplication -s extra checkMesh -allTopology -allGeometry
 
 # CLAUDE.md 9.1 -- a mesh that fails checkMesh is not a mesh. Stop here and read
 # the log rather than solving on it and discovering the problem in the results.
-if grep -q "\*\*\*" log.checkMesh; then
+if ! grep -q "^Mesh OK" log.checkMesh; then
     echo
-    echo "!! checkMesh reported FAILURES -- see log.checkMesh"
+    echo "!! checkMesh FAILED -- see log.checkMesh"
     echo "!! Fix the mesh or justify every failure explicitly (CLAUDE.md 9.1)."
     echo "!! Not solving."
     exit 1
 fi
 
+# Non-orthogonality drives nNonOrthogonalCorrectors (CLAUDE.md 7). Surface it
+# here so it is not something you have to remember to go and look up.
+echo "== mesh accepted:"
+grep -E "cells:|non-orthogonality Max|Max skewness|Total volume" log.checkMesh.extra \
+    | sed 's/^/   /'
+echo "   (V_air should be 2.5302e-3 m3 -- CLAUDE.md 6.1)"
+
 # ---------------------------------------------------------------------------
 # Solve
 # ---------------------------------------------------------------------------
+# How many cells are there ACTUALLY? Not the background count.
+#
+# The two differ by ~5x -- CLAUDE.md 7 records m1 as 99 k background cells and
+# 1.07 M real ones, because surface-driven refinement dominates. Sizing the
+# SOLVE off the background count therefore put a 1.07 M-cell case on a single
+# core: ~4 hours at the measured 3.6 s/iteration, against well under an hour on
+# 8 ranks. CLAUDE.md 3.2 sizes ranks by the FINAL cell count, and by this point
+# checkMesh has already reported it, so use that.
+MESHCELLS=$(sed -n 's/^ *cells: *\([0-9][0-9]*\).*/\1/p' log.checkMesh | head -1)
+[ -n "$MESHCELLS" ] || MESHCELLS=$NCELLS   # fall back rather than divide by nothing
+
+# The CLAUDE.md 3.2 floor, stated as the rule rather than as a magic number:
+# below ~50 k cells/rank halo exchange dominates and scaling inverts. With
+# NPROCS from decomposeParDict this adapts on its own if the rank count changes.
+MINPERRANK=50000
+
+if [ "$MESHCELLS" -lt $((NPROCS * MINPERRANK)) ]; then
+    echo "== ${MESHCELLS} cells: below ${MINPERRANK}/rank on $NPROCS ranks, solving serial"
+else
+    echo "== ${MESHCELLS} cells: solving on $NPROCS ranks ($((MESHCELLS / NPROCS)) cells/rank)"
+fi
+
 # CLAUDE.md 1.4 -- 0.orig is the source of truth. 0/ is a copy made here.
 restore0Dir
 
-if [ "$NCELLS" -lt 200000 ]; then
-    runApplication "$APP"
+solve_ok=1
+if [ "$MESHCELLS" -lt $((NPROCS * MINPERRANK)) ]; then
+    runApplication "$APP" || solve_ok=0
 else
     # -force: the mesh changed under snappy and processor*/ was removed above.
     # Separate log suffix, or runApplication would see log.decomposePar from the
     # meshing stage and silently skip this -- leaving no fields to solve on.
     runApplication -s fields decomposePar -force
-    runPinned "$NPROCS" "$APP"
+    runPinned "$NPROCS" "$APP" || solve_ok=0
     runApplication reconstructPar -latestTime
+fi
+
+# runApplication does not propagate the solver's exit status, so without this
+# a crashed solve still prints the cheerful checklist below and looks like a
+# success. A FATAL IO ERROR in a function object dies on iteration 1 and is
+# very easy to miss.
+if [ "$solve_ok" -eq 0 ] || ! grep -q "^End" "log.$APP"; then
+    echo
+    echo "!! $APP did NOT finish cleanly -- see log.$APP"
+    tail -20 "log.$APP" | sed 's/^/   /'
+    exit 1
 fi
 
 echo

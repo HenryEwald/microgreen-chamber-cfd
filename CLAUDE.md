@@ -41,7 +41,7 @@ fill them — leave `TBD` and ask, or run a documented sensitivity sweep instead
 | OpenFOAM | v2606 (ESI/openfoam.com), api=2606 patch=0 |
 | Install prefix | `/usr/lib/openfoam/openfoam2606` (root-owned, read-only) |
 | Build | `linux64GccDPInt32Opt` — double precision, 32-bit labels, **optimised** |
-| Activate | `source /usr/bin/openfoam2606` (or run `openfoam2606` for a subshell) |
+| Activate | **`. /usr/lib/openfoam/openfoam2606/etc/bashrc`** — see the warning below |
 | Compiler | gcc 13.3.0 |
 | MPI | Open MPI 4.1.6 (`/usr/bin/mpirun`), `sys-openmpi` Pstream |
 | Decomposition libs | `libscotchDecomp.so`, `libptscotchDecomp.so` (scotch + parallel scotch available) |
@@ -54,11 +54,29 @@ fill them — leave `TBD` and ask, or run a documented sensitivity sweep instead
 label overflow is impossible at our target sizes. Nothing to work around.
 
 `~/.bashrc` does **not** source OpenFOAM. Every shell and every script must activate it
-explicitly. In non-interactive scripts use:
+explicitly:
 
 ```bash
-. /usr/bin/openfoam2606
+. /usr/lib/openfoam/openfoam2606/etc/bashrc
 ```
+
+> ### ⚠ Do **not** `source /usr/bin/openfoam2606` in a script
+>
+> Verified 2026-08-14. `/usr/bin/openfoam2606` is two lines: `exec .../etc/openfoam "$@"`.
+> Sourcing it **replaces the running shell with an interactive OpenFOAM session**, which then
+> reads its commands from the script's stdin. In a non-interactive script that is `/dev/null`,
+> so the session exits immediately — **the rest of the script never runs, and the exit status
+> is 0.** It fails silently. `openfoam2606` typed at a prompt, to get a subshell, is fine; it
+> is only sourcing that breaks.
+>
+> Two further traps when sourcing `etc/bashrc` from a `set -euo pipefail` script:
+> - it reads `WM_PROJECT_SITE` unset → **`set -u` aborts it**;
+> - its optional `_foamEtc -config adios2/hdf5/CGAL` probes return non-zero for packages this
+>   build does not ship → **`set -e` aborts it part-way**, and bash then reports the cryptic
+>   `pop_var_context: head of shell_variables not a function context`.
+>
+> So in a strict-mode script: `set +eu` → source → `set -eu`. `scripts/generate_case.sh` does
+> exactly this.
 
 ### 2.1 There is a second machine — the Windows authoring box
 
@@ -701,16 +719,37 @@ at `y⁺` ≈ 5–15, say so rather than quietly reporting wall heat flux as if 
 
   Full internal height is **14⅓ cm = 43 base cells at m1** — exact, since 29/3 + 14/3 = 43/3 cm.
 
-  | Level | Base cell | Background (W × D × H, full 14⅓ cm) | After hood carve + snappy + layers | Run as |
+  | Level | Base cell | Background (incl. 1-cell margin) | Final cells | Run as |
   |---|---|---|---|---|
-  | `m1` | 3.333 mm | 36 × 56 × 43 ≈ 87 k | ~0.15–0.25 M — smoke test | **serial** |
-  | `m2` | 1.667 mm | 72 × 112 × 86 ≈ 694 k | ~1.2–1.6 M — **default working mesh** | 8 ranks, CCD0 |
-  | `m3` | 0.833 mm | 144 × 224 × 172 ≈ 5.5 M | ~8–10 M — production / independence | 8–16, benchmark |
+  | `m1` | 3.333 mm | 38 × 58 × 45 = 99 k | **1.07 M** (measured) | **serial**, ~2 min |
+  | `m2` | 1.667 mm | 76 × 116 × 90 = 793 k | **5.97 M** (measured) | 8 ranks CCD0, ~5 min |
+  | `m3` | 0.833 mm | 152 × 232 × 180 = 6.35 M | **~33 M** (extrapolated) | ⚠ see below |
 
-  A parabolic hood fills exactly ⅔ of its bounding box, so the carve is modest. Run m1
-  **serial** —
-  4 ranks would be ~22 k cells/rank, below the ≥ 50 k floor in §3.2. m3 lands at the top of
-  the §3.2 "benchmark both" band; time 8 vs 16 ranks once rather than guessing.
+> ### ⚠ Measured 2026-08-14 — the earlier estimates in this table were ~5× low
+>
+> The original entries (0.15–0.25 M / 1.2–1.6 M / 8–10 M) counted the hood carve but not the
+> **refinement regions**, which dominate. Actual m1 → m2 growth is **5.6×**, not 8×, because
+> surface-driven refinement scales with area rather than volume.
+>
+> Consequences, in order of severity:
+>
+> 1. **`m3` is not buildable as configured.** ~33 M cells exceeds the `maxGlobalCells 20000000`
+>    cap in `snappyHexMeshDict`, so snappy would *silently stop refining* and produce a mesh
+>    that is not the level-3 mesh you asked for — the worst possible failure mode for a mesh
+>    independence study (§9.6). It is also ~35 GB+ of RAM.
+> 2. **`m1` is no longer a smoke test** at 1.07 M cells and ~2 minutes, though it is still
+>    fast enough to be useful as one.
+> 3. `m2` at 5.97 M sits in the §3.2 "3–10 M, benchmark 8 vs 16 ranks" band, not the
+>    "0.5–3 M, 8 ranks" band it was assumed to be in.
+>
+> **The refinement regions are where the cells are going, and `traySlots` is the worst
+> offender:** it is a single box spanning the *entire* tray footprint (12 × 13.1 × 2.8 cm) at
+> level 2, when the thing it exists to resolve is two 2.5 mm slots at the extreme edges in `x`.
+> Almost all of that volume is either inside the tray solid or open chamber that does not need
+> level 2. Replacing it with two thin boxes hugging the slots (`x` ∈ [−1, 4] mm and
+> [116, 121] mm) would cut the count substantially at identical slot resolution, and is the
+> obvious first move before attempting m3. **Not done — it changes the refinement the study is
+> built on, so it is the user's call.**
 - Ø 20 mm port ⇒ **12 cells across the port at m2**, 24 at m3, before refinement. Level 2 on
   the port walls gives 48 at m2 — enough to resolve the jet that sets the whole flow field.
 - **The tray side slots are the tightest feature in the mesh, and they are open.** The tray is
@@ -876,7 +915,8 @@ used, and no figure derived from them goes out without the caveat on it.
 ## 11. Quick command reference
 
 ```bash
-. /usr/bin/openfoam2606                      # activate (required in every shell/script)
+. /usr/lib/openfoam/openfoam2606/etc/bashrc  # activate (required in every shell/script)
+#   NOT `. /usr/bin/openfoam2606` -- that execs an interactive session, see 2
 cd ~/OpenFOAM/henry-v2606/run/microgreenChamber
 
 # mesh
