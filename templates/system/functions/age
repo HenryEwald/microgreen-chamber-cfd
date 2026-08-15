@@ -50,4 +50,79 @@ ageMax
     operation       max;
 }
 
+// ---------------------------------------------------------------------------
+// THE VERIFICATION. Do not report an age result without reading this number.
+// ---------------------------------------------------------------------------
+// Sandberg's ventilation theory gives one EXACT identity: the flux-weighted
+// mean age of the air LEAVING the domain equals the nominal time constant
+//
+//     <age>_exhaust  ==  tau  =  V_air / Q
+//
+// for ANY steady flow, whatever the internal recirculation looks like. It is a
+// statement of mass conservation on the age field, not a modelling result, so
+// it holds for a short-circuiting chamber exactly as it does for a well-mixed
+// one. That makes it a free, sharp check on the age SOLVE:
+//
+//     ageOutlet ~ tau   ->  the transport equation converged
+//     ageOutlet != tau  ->  it did not, and ageMean/ageMax are meaningless
+//
+// This matters here because the age equation is essentially pure advection
+// (in a laminar case nu_eff is molecular, so there is almost no diffusion to
+// conditionit) and it is genuinely hard to solve in a chamber with a stagnant
+// hood and closed recirculation streamlines -- regions whose age is set by
+// almost no boundary information at all.
+//
+// Measured 2026-08-15 at Q = 1.25 m3/h, m0: tau = 7.29 s.
+//
+// weightedAreaAverage + weightField phi is the FLUX weighting the identity
+// requires. A plain areaAverage is NOT the same quantity and will not equal tau.
+ageOutlet
+{
+    type            surfaceFieldValue;
+    libs            (fieldFunctionObjects);
+    writeControl    writeTime;
+    log             true;
+    writeFields     false;
+    regionType      patch;
+    name            outlet;
+    operation       weightedAreaAverage;
+    weightField     phi;
+    fields          (age);
+}
+
+// ---------------------------------------------------------------------------
+// Where the dead volume actually is
+// ---------------------------------------------------------------------------
+// The volume mean alone says the chamber is badly ventilated; it does not say
+// WHERE. These two zones are the ones the design question turns on:
+//
+//   hoodZone    everything above the box top (z > 96.667 mm) -- 0.72 L, ~29 % of
+//               the chamber, sitting entirely ABOVE the jet with no direct
+//               forced-convection path into it. CLAUDE.md 6.1 predicts this is
+//               the worst-ventilated region by a wide margin; this is the number
+//               that confirms or refutes that, rather than asserting it.
+//               In Phase 2 it is also where the LED heat goes, so a high age
+//               here and a warm cap are the same finding.
+//
+//   canopyZone  the growing volume itself, tray top to 50 mm. This is the one
+//               that matters agronomically -- stale air over the crop is what
+//               the whole study is about.
+//
+// Both zones are built by system/topoSetDict and exist in every case.
+ageHood
+{
+    $ageMean;
+    regionType      cellZone;
+    name            hoodZone;
+    operation       volAverage;
+}
+
+ageCanopy
+{
+    $ageMean;
+    regionType      cellZone;
+    name            canopyZone;
+    operation       volAverage;
+}
+
 // ************************************************************************* //

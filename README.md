@@ -3,11 +3,29 @@
 3D internal-flow analysis of a microgreen growth chamber — a rectangular box with a curved
 canopy, one fan inlet port and one outlet port — built on **OpenFOAM v2606** (ESI/openfoam.com).
 
-> **Status: setup phase.** The directory scaffold, conventions, and solver roadmap are in
-> place. Geometry, boundary-condition values, and operating conditions are still `TBD`
-> placeholders. No case has been meshed or run yet, and no result in this repo should be
-> treated as physical until the `TBD`s in [`CLAUDE.md` §6](CLAUDE.md) are filled from the
-> chamber build spec.
+> **Status: Phase 1 in progress — the first time-accurate runs are on the machine.**
+> (Last updated 2026-08-15.)
+>
+> Geometry is **complete and fully analytic** — no CAD, no STL by hand; `scripts/make_geometry.py`
+> writes the surfaces from the §6.1 parameters. The mesh-independence ladder (`m0`/`m1`/`m2`) is
+> built and documented in [`validation/mesh_independence.md`](validation/mesh_independence.md).
+>
+> **The headline Phase-1 finding so far is negative and important: the chamber does not reach a
+> steady state at any flow rate tested.** Four steady runs at `Q` = 1.25 m³/h — across a 16×
+> range of shear-layer resolution — all failed to converge, and the same is true at 5 m³/h. The
+> confined jet flaps. Phase 1 is therefore `pimpleFoam`, and every answer is a **time average
+> plus a fluctuation level**, never a single number. The transient matrix is running now; see
+> [`validation/transient_matrix.md`](validation/transient_matrix.md).
+>
+> A first ventilation number is in: the chamber **short-circuits badly**, air exchange
+> efficiency ≈ **10 %** against 50 % for perfect mixing
+> ([`validation/age_of_air.md`](validation/age_of_air.md)) — provisional, and to be superseded
+> by the transient.
+>
+> **Still `TBD` and blocking:** the LD3007MS Δp–Q curve (so the operating flow rate is a
+> motivated placeholder, not a measurement) and the LED duty cycle (which blocks Phase 2). No
+> absolute number here should be treated as a prediction of the built chamber until those are
+> filled from the build spec — see [`CLAUDE.md` §10.2](CLAUDE.md).
 
 ## Objectives
 

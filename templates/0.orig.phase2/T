@@ -36,14 +36,29 @@ boundaryField
         // WS2812B 16x16 panel, curved over the hood interior, 0.0256 m^2.
         //
         // *** WORKING VALUE: 38.4 W = 50 % of full white. PLACEHOLDER. ***
-        // Per the CLAUDE.md 6.3 energy balance this gives dT ~ 22.9 K at
-        // 5 m3/h -> a 43 C chamber, and ~66 C at the more likely 2.5 m3/h.
-        // Microgreens want 22-25 C. Runs at this power characterise the FLOW
-        // AND STRATIFICATION STRUCTURE; their absolute temperatures are NOT a
+        //
+        // Per the CLAUDE.md 6.3 energy balance, dT = P / (mdot*cp) and so scales
+        // as 1/Q. Updated 2026-08-15 -- the working flow rate moved to
+        // 1.25 m3/h (CLAUDE.md 10.2), which is 4x worse than the 5 m3/h figures
+        // this comment used to quote:
+        //
+        //     Q = 5     m3/h   38.4 W -> dT 22.9 K ->  43 C   (viable: ~5.0 W)
+        //     Q = 2.5   m3/h   38.4 W -> dT 45.8 K ->  66 C   (viable: ~2.5 W)
+        //     Q = 1.25  m3/h   38.4 W -> dT 91.7 K -> 112 C   (viable: ~1.3 W)
+        //          ^ the working value
+        //
+        // Microgreens want 22-25 C, so at the working Q this panel is ~30x over
+        // budget on power. Runs at 38.4 W characterise the FLOW AND
+        // STRATIFICATION STRUCTURE; their absolute temperatures are NOT a
         // prediction of the built chamber. Say so in NOTES.md and on every axis.
         //
-        // Thermally viable would be ~5 W. Change with:
-        //   foamDictionary -entry boundaryField/hood/Q -set 5 0/T
+        // This is an energy balance, not a CFD result -- no mesh, turbulence
+        // model or mixing improvement changes the MEAN. CFD decides uniformity.
+        // scripts/generate_case.sh prints the per-Q ceiling as a warning.
+        //
+        // Change with:
+        //   foamDictionary -entry boundaryField/hood/Q -set 1.3 0/T
+        // or at generation time:  --led 1.3
         type            externalWallHeatFluxTemperature;
         mode            power;
         Q               38.4;              // W over the whole patch

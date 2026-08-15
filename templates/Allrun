@@ -18,13 +18,53 @@ APP=$(getApplication)
 # `mpirun --oversubscribe` with no binding at all; unpinned ranks get migrated
 # across CCDs and lose the L3 they warmed, which is the whole point of the
 # V-cache die. Use this instead of runParallel.
+#
+# FOAM_CPUSET overrides the default `0-(np-1)` core list, so two cases can run
+# at once on disjoint core groups instead of both piling onto cores 0-3 and
+# time-slicing at half speed each. Set it to an mpirun --cpu-set list:
+#
+#     FOAM_CPUSET=0-3  ./Allrun &     # CCD0, 96 MB V-cache
+#     FOAM_CPUSET=8-11 ./Allrun &     # CCD1
+#
+# Leave it unset for a solo run -- the default is the CLAUDE.md 3.2 policy of
+# filling CCD0 from core 0 up, which is what a single case should always do.
+# The override does NOT change the rank count; that is still decided by the
+# 50 k-cells/rank floor below.
+#
+# ⚠ The cpu-set must be AT LEAST as wide as the rank count, and that is checked
+# below rather than left as advice. Getting it wrong is silent and expensive:
+# measured 2026-08-15, `FOAM_CPUSET=0-3` on a case the 50 k floor had sized at
+# 8 ranks packed 8 MPI ranks onto 4 physical cores and ran at 7.0 s/step against
+# 3.2 s/step properly placed -- a 2.2x loss, with mpirun reporting nothing and
+# the Allrun log cheerfully printing "8 ranks, pinned to cores 0-3". This is the
+# SMT oversubscription CLAUDE.md 3.2 forbids, arrived at by accident.
+cpuset_width()
+{
+    # Counts cores in an mpirun --cpu-set list: "0-7", "0-3,8-11", "2", ...
+    echo "$1" | tr ',' '\n' | awk -F- '
+        NF==2 {n += $2 - $1 + 1; next}
+        NF==1 && $1 != "" {n += 1}
+        END {print n+0}'
+}
+
 runPinned()
 {
     _np=$1 ; _app=$2 ; shift 2
     _log="log.$_app"
     [ -f "$_log" ] && { echo "$_app already run: remove $_log to re-run"; return 0; }
-    echo "Running $_app ($_np ranks, pinned to cores 0-$((_np - 1))) on $PWD"
-    mpirun --cpu-set "0-$((_np - 1))" --bind-to core -np "$_np" \
+    _cpuset=${FOAM_CPUSET:-"0-$((_np - 1))"}
+    _width=$(cpuset_width "$_cpuset")
+    if [ "$_width" -lt "$_np" ]; then
+        echo
+        echo "!! FOAM_CPUSET='$_cpuset' is $_width cores but $_app needs $_np ranks."
+        echo "!! mpirun would pack $_np ranks onto $_width cores -- the SMT"
+        echo "!! oversubscription CLAUDE.md 3.2 forbids (measured 2.2x slower)."
+        echo "!! Widen FOAM_CPUSET to >= $_np cores, or lower numberOfSubdomains"
+        echo "!! in system/decomposeParDict. Not solving."
+        exit 1
+    fi
+    echo "Running $_app ($_np ranks, pinned to cores $_cpuset -- $_width cores) on $PWD"
+    mpirun --cpu-set "$_cpuset" --bind-to core -np "$_np" \
         "$_app" "$@" -parallel </dev/null > "$_log" 2>&1
 }
 
@@ -168,10 +208,62 @@ else
     # A steady run only has one meaningful time; a transient one has a history,
     # and -latestTime would silently throw it away. Match the solver by name --
     # NOT a `*impleFoam` glob, which also matches simpleFoam.
+    #
+    # ⚠ Bare `reconstructPar` RECONSTRUCTS NOTHING. Measured 2026-08-15 on the
+    # finished m0+jetRefine transient: it printed
+    #
+    #     --> FOAM Warning : ... No times selected
+    #
+    # and exited 0, leaving the case with only 0/ in its root while
+    # processor*/ held 46 .. 48. Allrun then printed its cheerful acceptance
+    # checklist. Nothing downstream said the fields were missing until
+    # age_of_air.sh went looking for phiMean and found no reconstructed time.
+    #
+    # Cause: reconstructPar builds its time list from the CASE ROOT, which on a
+    # decomposed case contains only `constant` and `0`, and the default
+    # selection excludes 0 (see `reconstructPar -help`: `-withZero  Include
+    # '0/' dir in the times list`). So the selection comes out empty. It is
+    # `-latestTime` and explicit `-time` ranges that consult the processor
+    # directories.
+    #
+    # Fix: read the range straight off processor0 and pass it explicitly. Both
+    # `-latestTime` and `-time 'a:b'` were verified working on this case.
+    # Exclude time 0 from the range: it is the initial condition, restore0Dir
+    # already put it in the case root, and reconstructing it wastes a pass.
+    if [ -d processor0 ]; then
+        PT=$(ls processor0 | grep -E '^[0-9]' | grep -vx '0' | sort -g)
+        PFIRST=$(echo "$PT" | head -1)
+        PLAST=$(echo "$PT" | tail -1)
+    fi
     case "$APP" in
-        pimpleFoam|buoyantPimpleFoam) runApplication reconstructPar ;;
-        *)                            runApplication reconstructPar -latestTime ;;
+        pimpleFoam|buoyantPimpleFoam)
+            if [ -n "${PFIRST:-}" ] && [ -n "${PLAST:-}" ]; then
+                echo "== reconstructing transient history $PFIRST:$PLAST"
+                runApplication reconstructPar -time "$PFIRST:$PLAST"
+            else
+                runApplication reconstructPar -latestTime
+            fi
+            ;;
+        *)  runApplication reconstructPar -latestTime ;;
     esac
+
+    # Assert it actually produced something -- the failure above was silent.
+    #
+    # Must require a time GREATER THAN ZERO. `0/` is always present (restore0Dir
+    # writes it) and `0.orig/` matches `[0-9]*` too, so the obvious check
+    # `ls [0-9]* | grep -v orig` succeeds on a case where nothing whatsoever was
+    # reconstructed. First draft of this guard did exactly that and would have
+    # passed the very failure it exists to catch.
+    RECON=$(ls -d [0-9]* 2>/dev/null | grep -vx '0.orig' | grep -vx '0' | tr '\n' ' ')
+    if [ -z "$RECON" ]; then
+        echo
+        echo "!! reconstructPar produced NO time directories beyond 0/, though"
+        echo "!! processor0 holds: ${PT:-<none>}"
+        echo "!! See log.reconstructPar. Do NOT treat this run as complete --"
+        echo "!! post-processing will find no fields and say so much later."
+        exit 1
+    fi
+    echo "== reconstructed: $RECON"
 fi
 
 # runApplication does not propagate the solver's exit status, so without this

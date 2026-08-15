@@ -118,11 +118,25 @@ report.
    The mesh is not failing, but there is no headroom, and `nNonOrthogonalCorrectors 1` in
    `fvSolution` is probably worth raising to 2 (CLAUDE.md §7 says to set it from what you
    actually got).
-3. **Phase 2 is untested.** `externalWallHeatFluxTemperature mode power` on `hood`, and the
-   whole `buoyantSimpleFoam` path, have still never been executed. Expect more of the same
-   class of dict error.
-4. **No converged solve yet.** m1 was run to iteration 78 only, to prove the pipeline. Nothing
-   here is a physical result.
+3. ~~**Phase 2 is untested.**~~ **CLOSED 2026-08-15 — and the prediction was right.**
+   A deliberate 0.03-τ smoke test (`runs/p2_smoke_m0`) found exactly "more of the same class of
+   dict error": `buoyantPimpleFoam` died on **time step 1** with
+   `Entry 'rhoFinal' not found in dictionary "system/fvSolution/solvers"`. PIMPLE needs a
+   `<field>Final` for every field it solves, and `rho` was a bare entry matching neither
+   `p*Final` nor the `"(U|k|omega|e|h)Final"` regex. Phase 1 could never have caught it —
+   `pimpleFoam` is incompressible and never solves `rho`. Fixed as `"rho.*"`.
+   `externalWallHeatFluxTemperature mode power` on `hood` is confirmed correct, as is `p` being
+   `calculated` (derived from `p_rgh`). See `validation/transient_matrix.md` §4b.
+4. ~~**No converged solve yet.**~~ **SUPERSEDED 2026-08-15 — there will not be one.**
+   The chamber does not reach a steady state at any flow rate tested: four steady runs across a
+   16× range of shear-layer resolution, none within four orders of the `residualControl` target.
+   The confined jet flaps. Phase 1 is `pimpleFoam` and every answer is a **time average plus a
+   fluctuation level**. See CLAUDE.md §5.1 and `validation/transient_matrix.md`.
+
+> **This document is a dated record of the 2026-08-14 first execution, not living
+> documentation.** Items 1 and 2 above are still open; 3 and 4 are annotated rather than
+> rewritten so the original predictions stay legible. For current state see `README.md` and
+> `validation/`.
 
 ## Resolved from the original unverified list
 

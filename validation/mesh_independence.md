@@ -62,10 +62,40 @@ smaller than the unsteadiness it sits inside. Refining further does not buy a
 better answer — it buys a more precise number for a quantity whose true value
 oscillates by an order of magnitude more.
 
-Consequence for run planning: **the transient should be run at m0.** Projected
-from the measured 2.28 s/step anchor, a 6.6-τ transient costs 1.6 h at m0, 9.1 h
-at m1 and 102 h at m2 — m2 pays twice, 5.6× the work per step *and* 2× the steps,
-because the Courant-limited Δt halves with the cells.
+Consequence for run planning: **the transient should be run at m0.** The relative
+ordering below still holds — m2 pays twice, 5.6× the work per step *and* 2× the
+steps, because the Courant-limited Δt halves with the cells — but the absolute
+hours have been superseded.
+
+> ### ⚠ CORRECTED 2026-08-15 — the projected transient costs here were ~12× low
+>
+> This paragraph used to read *"projected from the measured 2.28 s/step anchor, a
+> 6.6-τ transient costs 1.6 h at m0, 9.1 h at m1 and 102 h at m2."* **Measured
+> against a running case, m0 is ~21 h, not 1.6 h.** Three compounding reasons,
+> none of them the mesh:
+>
+> 1. **The 2.28 s/step anchor is obsolete.** It was measured at `nCorrectors 2`
+>    with a short outer loop — 8 GAMG pressure solves per step. The template now
+>    runs `nOuterCorrectors 20` with `residualControl`, which converges in a
+>    measured **11 outer iterations** ⇒ **22 pressure solves per step**. That
+>    stability is deliberate and documented in `fvSolution`; the cost is real.
+> 2. **`--jetRefine` doubles the step count**, not just the cell count. Halving
+>    the port cell halves Δt at fixed jet Courant, so it is +9 % cells **and**
+>    2× the steps — ~2.2× the wall clock. §7's "+25 % cells" is the *spatial*
+>    cost only.
+> 3. **Lower `Q` is not cheaper** (CLAUDE.md §5.1, retracted 2026-08-15): τ ∝ 1/`Q`
+>    and Δt ∝ 1/`Q` cancel, so a 6.6-τ run is ~24.5 k steps at every flow rate.
+>
+> Measured at `Q` = 1.25 m³/h, 8 ranks:
+>
+> | | cells | Δt | steps | s/step | wall clock |
+> |---|---|---|---|---|---|
+> | m0 `--jetRefine`, laminar | 415,334 | 1.96e-3 | 24,546 | **2.96** | **~21 h** |
+> | m0 `--jetRefine`, kOmegaSST | 415,334 | 1.96e-3 | 24,546 | **5.4** | **~37 h** |
+> | m0 plain, laminar | 379,918 | 3.92e-3 | 12,270 | ~3 (proj.) | ~10 h |
+>
+> The conclusion *"run the transient at m0"* is unchanged and in fact reinforced:
+> at these rates m1 would be ~60 h and m2 out of reach entirely.
 
 `y+` supports this. Area-averages stay in the viscous sublayer at m0:
 

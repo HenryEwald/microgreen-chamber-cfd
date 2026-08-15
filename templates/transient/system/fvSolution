@@ -68,7 +68,23 @@ solvers
         relTol          0;
     }
 
-    rho
+    // ⚠ rhoFinal is NOT optional. Measured 2026-08-15: with only a plain `rho`
+    // entry here, buoyantPimpleFoam dies on the FIRST time step with
+    //
+    //     --> FOAM FATAL IO ERROR
+    //     Entry 'rhoFinal' not found in dictionary "system/fvSolution/solvers"
+    //
+    // PIMPLE looks up `<field>Final` for the last outer corrector of every
+    // field it solves. The `"(U|k|omega|e|h)Final"` regex above covers the
+    // momentum/turbulence/energy set and `p_rghFinal` is written out, but `rho`
+    // was a bare entry and matched neither -- so the gap was invisible until the
+    // buoyant solver was actually run. Phase 1 never touches it: pimpleFoam is
+    // incompressible and never solves rho at all.
+    //
+    // Written as a regex so the pair cannot drift apart again. relTol 0.01 is
+    // harmless on the final corrector here -- rho is an algebraic update from
+    // the thermo, not a transported field -- but keep both entries present.
+    "rho.*"
     {
         solver          PCG;
         preconditioner  DIC;

@@ -97,6 +97,29 @@ def avg_start(case):
     return float(m.group(1)) if m else 0.0
 
 
+# CLAUDE.md 6.1 -- free air volume, the residence-time denominator. The tray
+# displaces 0.359 L of the 2.890 L internal volume.
+V_AIR = 2.530e-3  # m3
+
+
+def tau(case):
+    """Residence time V_air / Q, derived from the case's own inlet BC.
+
+    Read from 0.orig/U rather than taken as a constant: tau scales as 1/Q, so
+    the 1.82 s that was hard-coded here (correct only at Q = 5 m3/h) understated
+    the residence time by 4x at the Q = 1.25 m3/h working value -- which would
+    have reported a 6.6-tau run as a 26-tau one and made a marginally-sampled
+    average look comfortably converged. The BC is the authoritative source: it
+    is what the solver actually applied, not what a note says was intended.
+    """
+    txt = (case / "0.orig/U").read_text()
+    m = re.search(r"^\s*volumetricFlowRate\s+([0-9.eE+-]+);", txt, re.M)
+    if not m:
+        return None
+    q = float(m.group(1))
+    return V_AIR / q if q else None
+
+
 def psd(t, y):
     """Power spectral density on a uniformly resampled signal.
 
@@ -139,6 +162,31 @@ def main(case_dir):
         sys.exit(f"no traySignal output under {case}/postProcessing -- has it run?")
     tray = tray[:, 0]
     win = ts >= t0
+
+    # Refuse to plot a run that has not reached its averaging window.
+    #
+    # Without this the script happily writes a figure and prints a statistics
+    # table built from ZERO samples -- observed 2026-08-15 on a case at t = 4.4 s
+    # with timeStart 20.05 s, which reported "averaging window: 20.05 s ->
+    # 4.37 s (-2.2 residence times), 0 samples" and still produced a PNG that
+    # looks like a result. A negative window is not a plot; it is a run that has
+    # not got there yet.
+    n_win = int(win.sum())
+    if n_win < 32:
+        tau_s = tau(case)
+        msg = [
+            f"{case.name}: only {n_win} samples at or after the averaging start "
+            f"t0 = {t0:g} s.",
+            f"  the record currently ends at t = {ts[-1]:g} s"
+            + (f" ({ts[-1] / tau_s:.2f} tau)" if tau_s else ""),
+        ]
+        if ts[-1] < t0:
+            msg.append("  the run has NOT reached its averaging window yet -- "
+                       "fieldAverage has not started either, so there is no")
+            msg.append("  phiMean and no statistics to report. Let it run.")
+        msg.append("  to look at the startup transient anyway, override the "
+                   "window with compare_transients.py --from <t>")
+        sys.exit("\n".join(msg))
 
     fig, axes = plt.subplots(2, 2, figsize=(13, 8))
     fig.patch.set_facecolor(SURFACE)
@@ -238,8 +286,10 @@ def main(case_dir):
     print(f"wrote {out}\n")
 
     # --- table view --------------------------------------------------------
+    tau_s = tau(case)
+    ntau = f"{(ts[-1] - t0) / tau_s:.1f} residence times" if tau_s else "tau unknown"
     print(f"averaging window: {t0:g} s -> {ts[-1]:g} s "
-          f"({(ts[-1] - t0) / 1.82:.1f} residence times), {win.sum()} samples")
+          f"({ntau}, tau = {tau_s:.2f} s), {win.sum()} samples")
     print(f"median time step: {np.median(np.diff(ts)):.3e} s\n")
     print(f"{'quantity':<34}{'mean':>13}{'RMS':>13}{'RMS %':>9}{'min':>13}{'max':>13}")
 

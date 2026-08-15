@@ -134,6 +134,28 @@ def label_end(ax, x, y, text, color, dy=0):
     )
 
 
+# CLAUDE.md 6.1 -- free air volume, the residence-time denominator.
+V_AIR = 2.530e-3  # m3
+
+
+def case_tau(case):
+    """Residence time V_air / Q, from the case's own inlet BC.
+
+    Authoritative because it is what the solver actually applied, rather than
+    what a note says was intended. Returns None if the BC cannot be parsed, so
+    the caller can omit the reference line instead of drawing a wrong one.
+    """
+    try:
+        txt = (case / "0.orig/U").read_text()
+    except OSError:
+        return None
+    m = re.search(r"^\s*volumetricFlowRate\s+([0-9.eE+-]+);", txt, re.M)
+    if not m:
+        return None
+    q = float(m.group(1))
+    return V_AIR / q if q else None
+
+
 def main(case_dir):
     case = pathlib.Path(case_dir).resolve()
     pp = case / "postProcessing"
@@ -207,15 +229,24 @@ def main(case_dir):
         ax[4].plot(x, y, color=SERIES[slot], linewidth=1.6, marker="o", markersize=4.5)
         label_end(ax[4], x, y, name, SERIES[slot])
     # tau = V_air / Q -- the sanity target the FO header names.
-    ax[4].axhline(1.82, color=INK_MUTED, linewidth=1.2, linestyle=(0, (5, 4)))
-    ax[4].annotate(
-        "nominal tau = 1.82 s",
-        xy=(ta[0], 1.82),
-        xytext=(0, 5),
-        textcoords="offset points",
-        color=INK_2,
-        fontsize=8,
-    )
+    #
+    # Read from the case's own inlet BC, NOT hard-coded. The 1.82 s that used to
+    # be written here is correct only at Q = 5 m3/h; tau scales as 1/Q, so at the
+    # Q = 1.25 m3/h working value (CLAUDE.md 10.2) the true figure is 7.29 s and
+    # this reference line was 4x too low -- which would make a badly ventilated
+    # chamber look four times worse than it is. Same bug, same fix, as
+    # plot_transient.py (2026-08-15).
+    tau_s = case_tau(case)
+    if tau_s:
+        ax[4].axhline(tau_s, color=INK_MUTED, linewidth=1.2, linestyle=(0, (5, 4)))
+        ax[4].annotate(
+            f"nominal tau = {tau_s:.2f} s",
+            xy=(ta[0], tau_s),
+            xytext=(0, 5),
+            textcoords="offset points",
+            color=INK_2,
+            fontsize=8,
+        )
     ax[4].set_ylim(bottom=0)
     style(ax[4], "Age of air  (ventilation effectiveness)", "age  [s]", "iteration")
 

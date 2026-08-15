@@ -187,6 +187,27 @@ lose the L3 they warmed.
   slow and huge. (The tutorials ship `ascii` — do not copy that.)
 - **`purgeWrite 5;`** for transient runs unless you specifically need the full history. Disk
   is the binding constraint at 116 GB free.
+
+  > **⚠ It also silently makes ANIMATION impossible, and at `m0` the disk argument no longer
+  > holds.** `purgeWrite 5` deletes the history *as the run proceeds* — there is no recovering
+  > it afterwards, so a 48 s run leaves 2.5 s of frames. Measured 2026-08-15 at m0+`jetRefine`
+  > (415 k cells, 8 ranks, binary):
+  >
+  > | | frames | disk |
+  > |---|---|---|
+  > | `purgeWrite 5` (current) | 5 of 96 | **0.5 GB** |
+  > | `purgeWrite 0`, Phase 1 | 96 | **9.6 GB** |
+  > | `purgeWrite 0`, Phase 2 (+`T`, `alphat`, RANS fields ≈ +40 %) | 96 | **13.4 GB** |
+  >
+  > Against 109 GB free, keeping the full history for **one or two** cases is cheap. It is not
+  > cheap for a 4-case Phase 3 sweep (~54 GB), which is presumably what the setting was
+  > guarding. **Decide per study, not globally** — and decide *before* the run, because the
+  > frames cannot be recovered later.
+  >
+  > What is worth animating: `U`, `mag(U)`, `T`. **Not `age`** — it solves a *steady* transport
+  > equation, so a per-frame `age` answers "what age field would this instant's flow have if it
+  > persisted forever", which is exactly the quantity §8.4 removed from the transient config.
+  > The 3D ventilation map is a single `age` field on `phiMean`, not a movie.
 - **`runTimeModifiable false;`** — avoids re-reading every dict every timestep.
 - **Decomposition method:** `scotch` (no manual `n (x y z)` needed, handles the curved canopy
   and port geometry better than `hierarchical`). `hierarchical` only for regular block meshes.
@@ -310,8 +331,9 @@ a mesh or BC problem that Phase 1 would have exposed in 5 minutes.
 >
 > - **Consequence: Phase 1 is `pimpleFoam` at every `Q` tested.** Do not spend another steady
 >   run looking for a rung that settles. `generate_case.sh` now warns on steady + laminar.
->   The cost is manageable at the bottom rung — Δt scales as 1/`U`, so a 6.6-τ transient is
->   ~2.3 h at m1 and ~0.4 h at m0, against 9.1 h at 5 m³/h.
+>   ⚠ The claim that once stood here — "the cost is manageable at the bottom rung, ~2.3 h at
+>   m1 and ~0.4 h at m0 against 9.1 h at 5 m³/h" — is **wrong and has been retracted.**
+>   A lower `Q` is **not** cheaper; the cost is flat in `Q`. See the corrected cost note below.
 > - Phase 2 inherits this. A buoyant case that will not converge at 5 m³/h is now the
 >   *expected* outcome, not evidence of a BC error — and §6.3's stable stratification is a
 >   second, independent reason to expect the same.
@@ -333,9 +355,63 @@ a mesh or BC problem that Phase 1 would have exposed in 5 minutes.
 >
 > §9.6 measures the justification: at m0 the tray metrics are within 0.3 % / 2.0 % of m1,
 > against a temporal fluctuation of ±3.6 % / ±7.9 %. The mesh is not the limiting error.
+
+> ### ⚠ RETRACTED 2026-08-15 — "lower `Q` is cheaper" is wrong. Transient cost is FLAT in `Q`.
 >
-> Lower `Q` is cheaper too — Δt scales as 1/`U`, so a transient at m1 costs 9.1 h at
-> 5 m³/h, 4.6 h at 2.5, and 2.3 h at 1.25.
+> This section used to close with: *"Lower `Q` is cheaper too — Δt scales as 1/`U`, so a
+> transient at m1 costs 9.1 h at 5 m³/h, 4.6 h at 2.5, and 2.3 h at 1.25."* That is an
+> arithmetic error, and it propagated into §10.2 as a reason to prefer `Q` = 1.25.
+>
+> **It applied the Δt saving and forgot the endTime penalty.** Both scale the same way:
+>
+> ```
+>     steps = endTime / Δt = 6.6·τ / Δt ,     τ = V_air/Q ∝ 1/Q ,     Δt ∝ 1/U ∝ 1/Q
+>           = 6.6·(V_air/Q) / (k/Q) = 6.6·V_air/k        ← Q cancels
+> ```
+>
+> A 6.6-τ transient is **the same number of steps at every flow rate**, because a slower flow
+> needs a proportionally longer run to see the same number of flow-throughs. Confirmed against
+> the generator: `Q` = 5 at m1 gives 24,505 steps, `Q` = 1.25 at m0+`--jetRefine` gives 24,546
+> — the same mesh resolution at the port, the same count. **Choose `Q` on physics, never on
+> cost.**
+>
+> #### The bug this exposed: `maxDeltaT` was a constant
+>
+> Worse than neutral, low `Q` was actively **4× more expensive** than high `Q`, because
+> `templates/transient/system/controlDict` shipped a fixed `maxDeltaT 1e-3` sized for
+> `Q` = 5 m³/h. Measured 2026-08-15 on the first m0+`--jetRefine` run at `Q` = 1.25: max
+> Courant sat at **2.03 against a `maxCo` of 6**, i.e. the clock cap was binding and the
+> Courant condition was not. Δt stayed at the `Q` = 5 value while `endTime` grew 4× with τ.
+>
+> `maxDeltaT` is a cap on how coarsely the **jet** is stepped, so it has to scale with the
+> flow like everything else. `generate_case.sh` now sets it from a fixed jet Courant number
+> on the port cell:
+>
+> ```
+>     maxDeltaT = 2.6 · h_port / U_in
+> ```
+>
+> 2.6 is not a new number — it is what the template's own measured anchor already used
+> (`Q` = 5, m1, `h_port` = 0.833 mm ⇒ 4.9e-4 s), and the expression reproduces that
+> 4.901e-4 exactly. `maxCo 6` stays as the safety net for the small near-wall cells.
+>
+> #### Measured cost, `Q` = 1.25 m³/h, 4 ranks on CCD0 (2026-08-15)
+>
+> | | cells | `h_port` | Δt | steps | s/step | wall clock |
+> |---|---|---|---|---|---|---|
+> | `m0` plain | 380 k | 1.667 mm | 3.92e-3 | 12,270 | 3.6 | **~12 h** |
+> | `m0` `--jetRefine` | 415 k | 0.833 mm | 1.96e-3 | 24,546 | 3.2 | **~22 h** |
+> | `m1` `--jetRefine` | 1.33 M | 0.417 mm | 9.80e-4 | 49,090 | ~5 (proj.) | **~68 h — not affordable** |
+>
+> Note `--jetRefine` costs **2× the steps as well as +9 % cells**, because halving the port
+> cell halves the time step at fixed jet Courant. It is not the cheap option the +25 %
+> cell-count figure in §7 suggests — that figure is the *spatial* cost only.
+>
+> The per-step cost is also ~3× the old 2.28 s/step anchor at comparable cells/rank, because
+> the anchor predates the `nOuterCorrectors 20` + `residualControl` configuration: the outer
+> loop now converges in a measured **11 iterations**, i.e. 22 GAMG pressure solves per step
+> against the anchor's 8. That buys the stability documented in `fvSolution` — do not trade
+> it back for speed without re-reading why it is there.
 
 ### 5.2 Key modelling decisions
 
@@ -728,6 +804,31 @@ it stays correct when the port geometry changes, which it will.
 > **So the panel cannot run above roughly 8 W without the chamber overheating**, no matter how
 > good the mixing is — and at the *reduced* flow the free-air caveat implies (§6.2), the
 > ceiling is lower still: at 2.5 m³/h, `ΔT = 1.19·P` and 5 W already gives 26 °C.
+>
+> > #### ⚠ 2026-08-15 — the whole table above is at `Q` = 5 m³/h. The working `Q` is 1.25.
+> >
+> > `ΔT` scales as **1/`Q`**, and the working flow rate moved to 1.25 m³/h on 2026-08-14
+> > (§10.2) *after* this table was written. Every figure above is therefore **4× optimistic**
+> > for the current default, and the two working placeholders compound badly:
+> >
+> > | `Q` | `ΔT`/`P` | 38.4 W (the working LED value) | **`P` for a 3 K rise** |
+> > |---|---|---|---|
+> > | 5 m³/h | 0.60 K/W | 22.9 K ⇒ 43 °C | **5.0 W** (≈ 7 % duty) |
+> > | 2.5 | 1.19 | 45.8 K ⇒ 66 °C | 2.5 W |
+> > | **1.25 (working)** | **2.39** | **91.7 K ⇒ 112 °C** | **1.3 W — ≈ 1.7 % duty** |
+> >
+> > **At the working operating point the panel ceiling is ~1.3 W, not ~8 W** — about 1.7 % of
+> > the WS2812B's 76.8 W full-white draw. The default pair (38.4 W, 1.25 m³/h) overshoots the
+> > 22–25 °C band by roughly **30×** on power.
+> >
+> > This does not change the plan — Phase 2 still characterises flow structure and
+> > stratification usefully, and absolute temperatures were already flagged as
+> > non-predictive. It does sharpen the conclusion: **the binding design problem is thermal,
+> > not fluid-dynamic.** If the real duty is anywhere near 50 %, no amount of flow-field work
+> > rescues it; the chamber needs far more airflow, active cooling, or a much dimmer panel.
+> >
+> > `generate_case.sh` now prints this as a `!! THERMALLY NON-VIABLE` warning at generation
+> > time, with the per-`Q` ceiling, so it cannot be discovered after a run instead of before.
 >
 > This is a **design constraint, not a CFD result**, and it reframes the study: CFD decides
 > *uniformity* — whether the heat is spread evenly or pooled in the hood — while the *mean*
@@ -1151,8 +1252,42 @@ foamDictionary -entry value -set "(0 0 -1.635)" constant/g
 > postProcess -func age -time <T>
 > ```
 >
-> The `age` solver entry stays in `fvSolution`; `postProcess` needs it. Secondary benefit: at
-> `writeInterval` 0.5 over 12 s that was 24 transport solves per run, all discarded.
+> The `age` solver entry stays in `fvSolution`. Secondary benefit: at `writeInterval` 0.5 over
+> 12 s that was 24 transport solves per run, all discarded.
+>
+> > #### ⚠ CORRECTED 2026-08-15 — the `postProcess` recipe above does NOT work. Use the script.
+> >
+> > ```bash
+> > scripts/age_of_air.sh runs/<case>              # phiMean, latest time
+> > scripts/age_of_air.sh runs/<case> --field phi --time 4000
+> > ```
+> >
+> > The `cp phiMean phi && postProcess -func age` recipe fails in two independent ways, both
+> > verified 2026-08-15:
+> >
+> > 1. **`-func age` finds no config.** There is no `age` file under
+> >    `etc/caseDicts/postProcessing/`, so the utility prints
+> >    `Cannot find functionObject file age` — as a *warning* — and **exits 0 having done
+> >    nothing**. It fails silently, which is the worst way for it to fail.
+> > 2. **`age` cannot run under `postProcess` at all.** `src/functionObjects/field/age/age.C`
+> >    line 128, inside `read()`, does
+> >    `mesh_.lookupObject<surfaceScalarField>(phiName_)` — so `phi` must already be
+> >    **registered when the function object is constructed**. `postProcess` constructs its
+> >    function objects *before* reading fields and never auto-loads a `surfaceScalarField`,
+> >    so this throws `failed lookup of phi ... available objects of type surfaceScalarField:
+> >    0()`. `-fields '(phi U)'` does not help (loads after construction), and
+> >    `simpleFoam -postProcess` does not help either (same ordering).
+> >
+> > `age` therefore has to run **inside a solver**, where `createFields` has registered `phi`
+> > and the turbulence model — which is exactly why the in-solver `ageMean` series in the
+> > steady runs works fine. `scripts/age_of_air.sh` copies the case to `<case>/ageEval/`, puts
+> > `phiMean` in as `phi`, and runs the solver for **one** deliberately tiny step (1e-8 s, or
+> > 1 iteration for a steady solver) purely to give the function object a live registry.
+> >
+> > Watch for a zero-iteration run: `endTime` must be *representably* larger than `startTime`.
+> > At t = 4000 an increment of 1e-8 printed with `%.10g` comes back as `4000`, `endTime` then
+> > equals `startTime`, and the solver prints `Starting time loop` → `End` having computed
+> > nothing while exiting 0. The script formats with `%.16g` and asserts the loop turned over.
 - `#include "system/functions/..."` from `controlDict` rather than inlining.
 - Check `etc/caseDicts/postProcessing/` for ready-made snippets before writing one.
 - ParaView 5.11.2 for 3D; read the case directly with the OpenFOAM reader (`paraFoam`),
@@ -1207,9 +1342,17 @@ used, and no figure derived from them goes out without the caveat on it.
 > zero back-pressure. This chamber presents ≳ 30 Pa (§6.2), at or beyond a 30 mm axial fan's
 > likely shut-off, and the fan is blowing into a hole 44 % of its face area — so the delivered
 > flow is "plausibly half or less". 1.25 is the bottom rung of the ladder and the most likely
-> of the three to bracket the real operating point. It is also the cheapest to run, by a lot:
-> Δt scales as 1/`U`, so a transient costs 2.3 h at m1 against 9.1 h at 5 m³/h, and the flow
-> may well settle *steady* at this rung (§5.1), which is another ~10× on top.
+> of the three to bracket the real operating point.
+>
+> ⚠ **Two of the three original reasons for this default have since been withdrawn**, and the
+> choice now rests entirely on the free-air argument above — which is still sound, so the
+> default stands. Struck out for the record:
+> - ~~"It is also the cheapest to run, by a lot: Δt scales as 1/`U`, so a transient costs
+>   2.3 h at m1 against 9.1 h at 5 m³/h"~~ — **wrong, retracted 2026-08-15.** τ scales as
+>   1/`Q` too, so the step count is flat in `Q`. See §5.1.
+> - ~~"and the flow may well settle *steady* at this rung, which is another ~10× on top"~~ —
+>   **tested and refuted 2026-08-14.** It does not settle; the chamber flaps at both ends of
+>   the ladder (§5.1, §7).
 >
 > **This is a better-motivated placeholder, not a measurement.** `generate_case.sh` now warns
 > when `Re_port` lands in the laminar or transitional band with a turbulent closure selected.
@@ -1252,11 +1395,64 @@ used, and no figure derived from them goes out without the caveat on it.
 | Does a coarse mesh make the flow look steadier than it is? | **Yes, badly.** m0 reports ±3.0 % tray fluctuation where m1 reports ±18.2 % — coarse-cell numerical diffusion damping a real oscillation. The *mean* is mesh-converged to 8 %; the fluctuation is not | 2026-08-14 |
 | Is `kOmegaSST`'s clean convergence at `Q` = 1.25 meaningful? | **No.** Measured `ν_t` = 5× molecular ⇒ `ν_eff`/`ν` = 6, `Re_eff` = 242 not 1458. It converges because it solves a 6× more viscous problem. See §5.2 | 2026-08-14 |
 | Largest error bar in the project | **Turbulence model, 89 %** on tray mean speed at `Q` = 1.25 (laminar 0.0288 vs kOmegaSST 0.0545 m/s) — vs 0.3 % mesh and ±3.6 % temporal | 2026-08-14 |
+| Is a transient cheaper at low `Q`? | **No — cost is FLAT in `Q`.** τ ∝ 1/`Q` and Δt ∝ 1/`Q` cancel exactly, so a 6.6-τ run is ~24.5 k steps at every flow rate. The old "2.3 h at 1.25 vs 9.1 h at 5" applied the Δt saving and forgot the endTime penalty. **Retracted.** See §5.1 | 2026-08-15 |
+| Why was low `Q` actually *more* expensive? | **`maxDeltaT` was a hard-coded 1e-3**, sized for `Q` = 5. At `Q` = 1.25 it bound at max Courant 2.03 against `maxCo` 6, so Δt stayed put while endTime grew 4×. Now set as `2.6·h_port/U_in` — a fixed jet Courant, which reproduces the measured 4.9e-4 anchor exactly | 2026-08-15 |
+| Is `--jetRefine` really only +25 %? | **No — that is the spatial cost only.** Halving the port cell also halves Δt at fixed jet Courant, so it is **+9 % cells and 2× the steps** ⇒ ~2.2× the wall clock. §7's "+25 % cells vs +460 % for the next mesh level" is still true and still the right trade, but it is not the whole bill | 2026-08-15 |
+| Error bar on a transient time-average | **`sd/√N` is invalid here** — samples are correlated. Monte-Carlo on AR(1): ±2·`sd/√N` covers the true mean **15 %** of the time, against 93 % for `sd/√N_eff` with `N_eff = N·Δt/2T_int`. `validation/compare_transients.py` uses the latter; `validation/test_stats.py` guards it | 2026-08-15 |
+| Does the §8.4 `postProcess -func age` recipe work? | **No, and it fails silently.** No `age` caseDict exists (warning + exit 0), and `age.C:128` looks up `phi` at *construction*, before `postProcess` reads fields. Must run inside a solver. Use `scripts/age_of_air.sh` | 2026-08-15 |
+| Hard-coded `tau = 1.82 s` in the plotting scripts | Present in **both** `plot_transient.py` and `plot_convergence.py` — correct only at `Q` = 5. At the working `Q` = 1.25 the true τ is 7.29 s, so the transient script over-reported the averaging window **4×** and the convergence script drew the age reference line **4× too low**. Both now read `volumetricFlowRate` from the case's own `0.orig/U` | 2026-08-15 |
+| How do you know an age solve converged? | **`<age>_outlet == τ` exactly**, for any steady flow — mass conservation on the age field. Now the `ageOutlet` FO. Measured −0.108 % (limitedLinear) / −0.016 % (upwind). **Do not report an age without it** | 2026-08-15 |
+| Is the age solve broken? (1000-iter caps, first solve diverging) | **No — cosmetic.** `limitedLinear`'s solution-dependent limiter changes the matrix each outer pass so the initial residual never contracts, but the identity holds to 0.1 %. Keep `limitedLinear`: `upwind` converges cleanly and is 6.6× closer on the identity, but smears the field and reports age **9.1 % low**. Carry 9 % as the age discretisation uncertainty | 2026-08-15 |
+| How well is the chamber ventilated? | **Badly — ε_a ≈ 10 %** (perfect mixing 50 %, piston 100 %). Volume-mean age **4.90 τ**, max **10.75 τ**. Severe short-circuiting. ⚠ **Provisional** — non-converged steady field; supersede with `phiMean` from the transient. See `validation/age_of_air.md` | 2026-08-15 |
+| Is the hood the worst-ventilated region, as §6.1 predicts? | **Provisionally NO.** `ageHood` = 4.82 τ against a chamber mean of 4.90 τ — **0.984 of the mean**, not "worst by a wide margin". `ageCanopy` is 4.67 τ, marginally the *best*. The chamber looks **uniformly stale**, not core-plus-dead-cap. ⚠ Same non-converged field, and the gap is smaller than the 9 % scheme uncertainty — **re-check on the transient before amending §6.1** | 2026-08-15 |
+| Where IS the dead air, then? | **On the INLET side, along the floor** — not the hood, and not the outlet side. Volume-averaged age falls monotonically from **6.28 τ** in the first 23 mm to **3.96 τ** in the last: air is **58 % older at the inlet end**. The jet entrains as it crosses, sweeping everything downstream toward the exit, while the pocket *beneath the incoming jet* sits in its shadow with no return path. Worst cell ~11 τ in that corner. The tray spans the whole gradient ⇒ **~55 % variation in air age across the crop**. Indicated fix is the **port arrangement** (angle the inlet down, offset the ports diagonally, add a return path), not jet strength. See `doc/ventilation/` | 2026-08-15 |
+| SMT oversubscription via `FOAM_CPUSET` | `FOAM_CPUSET=0-3` on a case the 50 k floor sized at **8 ranks** packed 8 ranks onto 4 cores: **7.0 s/step vs 2.94 properly placed, a 2.4× loss**, silently. `templates/Allrun` now measures the cpu-set width and refuses to launch if it is narrower than the rank count | 2026-08-15 |
+| Does the Phase 2 / 2b buoyant solver path actually run? | **It did not — `rhoFinal` was missing from the transient `fvSolution`.** `buoyantPimpleFoam` died on time step 1: PIMPLE needs `<field>Final` for every field it solves, and `rho` was a bare entry matching neither `p*Final` nor the `"(U\|k\|omega\|e\|h)Final"` regex. **Phase 1 cannot expose this** — `pimpleFoam` is incompressible and never solves `rho`. Now `"rho.*"`. Found by a deliberate 0.03-τ smoke test; without it the whole Phase 3 sweep would have produced zero time steps | 2026-08-15 |
+| *How* does `kOmegaSST` get its clean convergence? | ⚠ **RETRACTED 2026-08-15.** A matched-time window at 1.04–1.31 τ showed the laminar jet flapping (`r` = −0.36) while the RANS jet was symmetric (`r` = +0.999), suggesting the closure *removes* the instability. **The matched repeat at 1.92–2.19 τ reversed it** (+0.581 vs −0.997). Probe correlation on a 2 s window tracks the phase of a ≥ 8.9 s oscillation, not the presence of one. **Not established.** What survives: the tray mean spread is **~110 %** (+117 %, +107 % at two windows). See `validation/transient_matrix.md` §4a |  2026-08-15 |
+| Is the unsteadiness a jet-column instability (`St ≈ 0.3`)? | **No.** That mode would sit at 16.6 Hz; measured, the 5–30 Hz band holds **0.0 %** of the power against **100 %** below 1 Hz, with Nyquist at 255 Hz so the band is well resolved. It is a **chamber-scale recirculation, period ≈ 10.8 s ≈ 1.5 τ** (resolved on a 21.5 s record; order-of-magnitude). `functions/transientMonitors` is corrected. **The binding constraint is RECORD LENGTH, not sample rate** — 6.6 τ gives only ≈ 2.6 cycles | 2026-08-15 |
+| Is `bounding k` in the RANS arm a problem? | **No, when it is flat.** The kOmegaSST arm emits ~11,000 `bounding k` messages; `max(k)` sits at ~0.054 for the whole run and the clipped `min` is **positive** (3e-16, below `kMin`) — the solver is flooring near-zero `k` in cells where turbulence has decayed, expected at `Re_port` = 1458. Distinguish from the documented divergence (`k` → 1e105) by checking whether `max(k)` **grows**, not by counting messages. See `validation/transient_matrix.md` §4a-bis | 2026-08-15 |
+| ⚠ Statistics on short windows | **A statistic computed over a window shorter than the flow's own timescale reports the window, not the physics.** Bit this project twice in one day: the spectral peak sat at `1/T` for every record length tried, and probe correlation `r` swung +0.99 → −0.99 → −0.13 across successive 2 s windows against a ≥ 8.9 s timescale. The `r` version produced a plausible result **agreeing with the §5.2 prior**, which is why it was believed. Withdrawn: "flapping onsets at 1.05 τ" and "kOmegaSST suppresses the instability" | 2026-08-15 |
+| Do old cases in `runs/` drift after a template fix? | **Yes, silently.** `p1_transient_m1` predates the `maxDeltaT` fix and still carries `1e-3` where 4.901e-4 is correct — it would step **2× too coarse in the jet** while reporting a comfortable max Courant, because `maxCo 6` is never reached. `validation/audit_cases.sh` checks every case against what the current generator would produce, and exits 1 if any is stale. Regenerate rather than hand-edit (§1.3) | 2026-08-15 |
+| Are the sweep drivers usable as written? | **No — both rewritten.** `sweep_gravity.sh` and `sweep_Q.sh` were **steady, on `m2`, kOmegaSST by default**; every case would have failed to converge at ~5 h each. Now `m0 --jetRefine --transient`, model from `Re_port`, with cost warnings and `GVALS`/`QVALS`/`MESH` env overrides. See §10.4 | 2026-08-15 |
+| LED ceiling at the **working** `Q` | **~1.3 W, not ~8 W.** §6.3's table is at `Q` = 5; `ΔT` ∝ 1/`Q` and the working `Q` is 1.25, so the default pair (38.4 W, 1.25 m³/h) gives **ΔT = 91.7 K ⇒ 112 °C** — ~30× over budget, not the 43 °C the table implies. `generate_case.sh` now warns at generation time. **The binding design problem is thermal, not fluid-dynamic** | 2026-08-15 |
 ### 10.4 Needed later, not blocking anything now
+
+> ### ⚠ 2026-08-15 — Phase 3 is a 4–6 DAY compute job, not an afternoon. Scope it deliberately.
+>
+> Both sweep drivers were written before the flow was known to be unsteady, and both would have
+> produced nothing usable: `sweep_gravity.sh` ran **steady `buoyantSimpleFoam` on `m2`** with
+> the default `kOmegaSST`, and `sweep_Q.sh` ran **steady on `m2`** while describing itself as
+> "three cheap runs". Every case would have failed to converge, at ~5 h each, and the plots
+> would have looked fine. Both are rewritten to `m0 --jetRefine --transient` with the model
+> picked from `Re_port`.
+>
+> The honest cost, at the measured 24,546 steps/case:
+>
+> | | per case | whole sweep |
+> |---|---|---|
+> | `sweep_Q.sh` — 3 rungs, isothermal | **~17 h** (measured, 2.53 s/step) | **~52 h** |
+> | `sweep_gravity.sh` — 4 `g` + 0 g cross-check, buoyant | **~50 h** (estimated) | **~250 h ≈ 10 days** |
+>
+> **The buoyant figure went UP after measurement, not down.** The Phase 2 smoke test
+> (`runs/p2_smoke_m0`) ran `buoyantPimpleFoam` at **20.3 s/step** on 4 ranks under heavy
+> contention, against 7.0 s/step for `pimpleFoam` on the same mesh and rank count — i.e.
+> **buoyant is ≈ 2.9× the isothermal cost per step**, from the extra energy equation and a
+> stiffer pressure problem. Scaling the clean 8-rank isothermal rate of 2.53 s/step by that
+> factor gives ≈ 7.3 s/step ⇒ **~50 h per case**.
+>
+> ⚠ That is an extrapolation across two different contention levels, so treat it as an order of
+> magnitude, not a number. **Take one clean 8-rank measurement before committing to Phase 3** —
+> a few hundred steps is enough, and the difference between 30 h and 50 h per case decides
+> whether the sweep is a long weekend or a fortnight.
+>
+> **Recommendation: run the two `g` ENDPOINTS first** (`GVALS="0 9.81"`). If 0 g and 1 g are
+> indistinguishable within their correlated-sample error bars, there is no `Ri` crossover to
+> resolve and the intermediate Lunar/Mars points are not worth the machine time. Both scripts
+> take `GVALS`/`QVALS` and `MESH` from the environment for exactly this.
 
 7. **Gravity regimes of interest** — which values beyond 1 g, and what is the physical context
    (spaceflight, lunar/Mars surface, centrifuge)? Drives whether `g = 0` exactly is needed.
-   Phase 3 only.
+   Phase 3 only. **Now also a budget question** — see the cost box above.
 8. **What decides "good"?** Uniformity of velocity over the tray? A minimum air speed at
    canopy level? ACH? Temperature spread? The objective function should be defined before
    optimising anything. **Now answerable in concrete terms** — the metric surface is the

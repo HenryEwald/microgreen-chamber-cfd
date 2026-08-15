@@ -42,11 +42,23 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # a 30 mm axial fan, on top of a 30 mm fan blowing into a 20 mm hole (44 % of the
 # face area). The delivered flow is "plausibly half or less". 1.25 is the bottom
 # rung of the 5 / 2.5 / 1.25 ladder and the most likely of the three to bracket
-# the real operating point. It is also 4x cheaper to run transient, because the
-# Courant-limited dt scales as 1/U.
+# the real operating point.
 #
-# This is still a PLACEHOLDER pending the Dp-Q curve (CLAUDE.md 10.2). It is a
+# ⚠ RETRACTED 2026-08-15. This comment used to add: "It is also 4x cheaper to
+# run transient, because the Courant-limited dt scales as 1/U." That is WRONG
+# and it was one of the stated reasons for the default. dt does scale as 1/U,
+# but tau = V_air/Q scales as 1/Q too, so a 6.6-tau run is the SAME ~24.5 k
+# steps at every flow rate -- the two cancel exactly. Low Q is not cheaper; it
+# is not more expensive either. See CLAUDE.md 5.1.
+#
+# The free-air argument above is untouched and still carries the choice on its
+# own. This is still a PLACEHOLDER pending the Dp-Q curve (CLAUDE.md 10.2) -- a
 # better-motivated placeholder than 5, not a measurement.
+#
+# NOTE the interaction with --led: dT scales as 1/Q, so moving the default from
+# 5 to 1.25 m3/h made the Phase 2 thermal picture 4x worse. At this Q the LED
+# ceiling for a 3 K rise is ~1.3 W, not the ~5 W CLAUDE.md 6.3's table implies.
+# The phase-2 block below warns about it at generation time.
 NAME="" ; PHASE=1 ; MESH=m2 ; Q_M3H=1.25 ; GVAL=9.81 ; LED=38.4 ; MODEL=kOmegaSST
 TRANSIENT=0 ; END_TIME="" ; AVG_START="" ; JETREFINE=0
 
@@ -73,8 +85,13 @@ while [ $# -gt 0 ]; do
         *) echo "unknown option: $1" >&2 ; exit 1 ;;
     esac
 done
-if [ "$TRANSIENT" = 0 ] && { [ -n "$END_TIME" ] || [ -n "$AVG_START" ]; }; then
-    echo "--endTime/--avgStart are transient-only; add --transient" >&2 ; exit 1
+# --avgStart is meaningless without a time axis; --endTime is not. For a steady
+# run "time" is the SIMPLE iteration count, and being able to cap it is what
+# makes a cheap smoke test possible -- which is how the missing `rhoFinal` in
+# the buoyant path was found (2026-08-15). Without this the only way to
+# exercise buoyantSimpleFoam was to launch all 4000 iterations of it.
+if [ "$TRANSIENT" = 0 ] && [ -n "$AVG_START" ]; then
+    echo "--avgStart is transient-only; add --transient" >&2 ; exit 1
 fi
 [ -n "$NAME" ] || { echo "--name is required" >&2 ; exit 1 ; }
 
@@ -241,9 +258,15 @@ fi
 #
 # This does NOT apply to the RANS arm: its nut (measured 5x molecular) thickens
 # the layer by sqrt(6) and hides the problem.
+# Cell size at the port, in mm. The inlet/outlet are refinementSurfaces at
+# level 2 (base/4), or level 3 with --jetRefine (base/8). Needed by BOTH the
+# laminar shear-layer check below and the transient time-step cap, so it is
+# computed here rather than inside the `laminar` block.
+BASE_MM=$(awk -v n="$NX" 'BEGIN{printf "%.6f", 126.6667/n}')
+DIV=$([ "$JETREFINE" = 1 ] && echo 8 || echo 4)
+H_PORT_MM=$(awk -v b="$BASE_MM" -v d="$DIV" 'BEGIN{printf "%.6f", b/d}')
+
 if [ "$MODEL" = laminar ]; then
-    BASE_MM=$(awk -v n="$NX" 'BEGIN{printf "%.6f", 126.6667/n}')
-    DIV=$([ "$JETREFINE" = 1 ] && echo 8 || echo 4)
     XRES=$(awk -v b="$BASE_MM" -v d="$DIV" -v u="$U_IN" \
         'BEGIN{h=b/d/1000; printf "%.1f", h*h*u/1.516e-5*1000}')
     echo "  laminar shear layer: cell at port $(awk -v b="$BASE_MM" -v d="$DIV" 'BEGIN{printf "%.3f", b/d}') mm"\
@@ -291,6 +314,68 @@ if [ "$TRANSIENT" = 1 ]; then
     # the grep's, and a NOT-found placeholder (the success case) reads as failure.
     if grep -q "__AVG_START__" system/functions/transientMonitors; then
         echo "failed to set timeStart in functions/transientMonitors" >&2 ; exit 1
+    fi
+
+    # --- maxDeltaT must scale with the flow, like endTime does ---------------
+    # MEASURED 2026-08-15. The template shipped a FIXED maxDeltaT 1e-3, chosen
+    # for Q = 5 m3/h. At Q = 1.25 that cap binds long before maxCo does -- the
+    # m0+jetRefine run sat at max Courant 2.03 against a limit of 6 -- so the
+    # step size stayed at the Q = 5 value while endTime grew 4x with tau. The
+    # run therefore cost 4x MORE than at Q = 5, not less.
+    #
+    # That is also where CLAUDE.md 5.1's "2.3 h at 1.25 m3/h vs 9.1 h at 5"
+    # went wrong: it applied the dt ~ 1/U saving but not the endTime ~ 1/Q
+    # penalty. The two CANCEL EXACTLY. At a fixed jet Courant number a 6.6-tau
+    # transient is the same number of steps at every Q:
+    #
+    #     steps = 6.6 * tau / dt,   tau ~ 1/Q,   dt ~ 1/U ~ 1/Q   =>  constant
+    #
+    # So set the cap on the quantity that actually matters -- the Courant number
+    # in the JET, on the port cell -- rather than on the clock:
+    #
+    #     maxDeltaT = JET_CO * h_port / U_in
+    #
+    # JET_CO 2.6 is not a new number: it is the value the template's own
+    # measured anchor already used (Q = 5, m1, h_port 0.833 mm, dt 4.9e-4 s),
+    # and this expression reproduces that 4.9e-4 exactly. maxCo 6 stays as the
+    # safety net for the small near-wall cells.
+    JET_CO=2.6
+    MAXDT=$(awk -v c="$JET_CO" -v h="$H_PORT_MM" -v u="$U_IN" \
+        'BEGIN{printf "%.4g", c*h/1000/u}')
+    sed -i "s/^maxDeltaT       1e-3;/maxDeltaT       $MAXDT;/" system/controlDict
+    grep -q "^maxDeltaT       $MAXDT;" system/controlDict \
+      || { echo "failed to set maxDeltaT in system/controlDict" >&2 ; exit 1 ; }
+
+    NSTEPS=$(awk -v e="$END_TIME" -v d="$MAXDT" 'BEGIN{printf "%.0f", e/d}')
+    # Compute the tau multiple rather than echoing N_TAU_END: with --endTime the
+    # two differ, and printing the constant would report a 0.03-tau smoke test as
+    # a 6.6-tau production run.
+    NT_END=$(awk -v e="$END_TIME" -v t="$TAU" 'BEGIN{printf "%.2f", e/t}')
+    NT_AVG=$(awk -v a="$AVG_START" -v t="$TAU" 'BEGIN{printf "%.2f", a/t}')
+    echo "  transient: endTime $END_TIME s ($NT_END tau), avgStart $AVG_START s ($NT_AVG tau),"\
+         "maxDeltaT $MAXDT s -> ~$NSTEPS steps"
+    if awk -v n="$NT_END" 'BEGIN{exit !(n < 4)}'; then
+        echo "  !! only $NT_END tau of simulated time. A start-from-rest field needs"
+        echo "     ~3 flow-throughs to forget its initial condition, so anything"
+        echo "     below ~4 tau is a SMOKE TEST, not a result. Statistics from it"
+        echo "     are meaningless -- do not report them."
+    fi
+    echo "     (jet Courant $JET_CO on the ${H_PORT_MM} mm port cell at $U_IN m/s;"
+    echo "      step count is ~independent of Q -- dt ~ 1/Q and endTime ~ 1/Q cancel)"
+
+elif [ -n "$END_TIME" ]; then
+    # Steady: "time" is the SIMPLE iteration count. Capping it is only ever for
+    # a smoke test -- a steady run at any Q on this geometry does not converge
+    # (CLAUDE.md 5.1), so a short one proves the dicts load and the solver
+    # starts, nothing more.
+    sed -i "s/^endTime         4000;/endTime         $END_TIME;/" system/controlDict
+    grep -q "^endTime         $END_TIME;" system/controlDict \
+      || { echo "failed to set endTime in system/controlDict" >&2 ; exit 1 ; }
+    echo "  steady: endTime capped at $END_TIME iterations (default 4000)"
+    if awk -v e="$END_TIME" 'BEGIN{exit !(e < 500)}'; then
+        echo "  !! $END_TIME iterations is a SMOKE TEST, not a result. It proves the"
+        echo "     dicts load and the solver starts. Nothing more -- and a steady"
+        echo "     run here does not converge at 4000 either (CLAUDE.md 5.1)."
     fi
 fi
 
@@ -380,6 +465,35 @@ EOF
 echo "created runs/$NAME"
 echo "  solver     $SOLVER   mesh $MESH ($NX x $NY x $NZ)   model $MODEL"
 echo "  Q          $Q_M3H m3/h  ->  U_in $U_IN m/s   Re_port $RE   ACH $ACH   tau ${TAU}s"
-[ "$PHASE" = 2 ] && echo "  LED        $LED W  ->  predicted bulk dT $DT K"
+if [ "$PHASE" = 2 ]; then
+    echo "  LED        $LED W  ->  predicted bulk dT $DT K"
+
+    # --- thermal viability, BEFORE any CFD is spent on it --------------------
+    # Steady state, adiabatic walls, all LED power to air: the ventilation
+    # stream is the only heat sink, so P = mdot*cp*dT. dT is therefore fixed by
+    # P and Q ALONE -- no mesh, no turbulence model and no amount of mixing
+    # changes it (CLAUDE.md 6.3). CFD decides UNIFORMITY; the mean is already
+    # determined here. So say so at generation time rather than after a run.
+    #
+    # ⚠ The two working defaults COMPOUND, and CLAUDE.md 6.3's table hides it:
+    # that table was computed at Q = 5 m3/h and reports dT = 22.9 K for 38.4 W.
+    # The working Q is now 1.25 m3/h (CLAUDE.md 10.2), and dT scales as 1/Q, so
+    # the DEFAULT pair 38.4 W + 1.25 m3/h gives dT = 91.7 K -- a 111 C chamber,
+    # four times worse than the figure the doc quotes, and ~30x the 3 K that
+    # keeps microgreens in their 22-25 C band.
+    TIN=20                      # inlet air, CLAUDE.md 6.3 placeholder [C]
+    TOUT=$(awk -v t="$TIN" -v d="$DT" 'BEGIN{printf "%.0f", t + d}')
+    PMAX=$(awk -v q="$Q_M3S" 'BEGIN{printf "%.1f", 3.0*(q*1.2*1004.5)}')
+    if awk -v d="$DT" 'BEGIN{exit !(d > 5)}'; then
+        echo "  !! THERMALLY NON-VIABLE: dT = $DT K puts the chamber at ~$TOUT C"
+        echo "     against a 22-25 C target. This is an ENERGY BALANCE, not a CFD"
+        echo "     result -- P = mdot*cp*dT with the vent stream as the only sink."
+        echo "     No mesh, model or mixing improvement changes it."
+        echo "     At Q = $Q_M3H m3/h the ceiling is about ${PMAX} W for a 3 K rise."
+        echo "     Run it to characterise FLOW STRUCTURE and STRATIFICATION only."
+        echo "     Absolute temperatures from this case are NOT a prediction of the"
+        echo "     built chamber -- say so in NOTES.md and on every figure axis."
+    fi
+fi
 echo
 echo "  cd runs/$NAME && ./Allrun"

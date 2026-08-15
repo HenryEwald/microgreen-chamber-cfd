@@ -53,9 +53,34 @@ fieldAverage
 //
 // Deliberately separate from `trayPlane` in functions/trayMetrics, which
 // samples every 20 steps: that rate is right for watching a steady run settle
-// and far too coarse to resolve a flapping jet. At the expected dt ~ 1e-3 s
-// this samples at ~1 kHz, which is Nyquist-safe well past the jet-column
-// frequency (St ~ 0.3 on D = 20 mm at 4.42 m/s gives ~66 Hz).
+// and far too coarse to resolve a flapping jet.
+//
+// ⚠ MEASURED 2026-08-15 -- the jet-column justification below is WRONG for this
+// chamber, though the conclusion (sample every step) survives.
+//
+// The original argument was: "at dt ~ 1e-3 s this samples at ~1 kHz, which is
+// Nyquist-safe well past the jet-column frequency (St ~ 0.3 on D = 20 mm at
+// 4.42 m/s gives ~66 Hz)". That mode is not present. Spectrum of the lateral
+// flapping signal at Q = 1.25 m3/h, where St ~ 0.3 would put it at 16.6 Hz:
+//
+//     0.2-1.0 Hz  (chamber-scale) : 94.3 % of power
+//     1-5   Hz                    :  5.5 %
+//     5-30  Hz  (St ~ 0.3 band)   :  0.2 %   <-- essentially empty
+//     30-255 Hz                   :  0.0 %
+//
+// Nyquist was 255 Hz, so that band was well resolved: its emptiness is real.
+// The unsteadiness is a slow chamber-filling recirculation wander with a
+// timescale >= 3.6 s -- half a residence time or more -- not a jet-column
+// instability.
+//
+// Consequences:
+//   * sampling every time step is still right, just for a different reason --
+//     it is free, and it is what lets the LOW-frequency content be resolved at
+//     all once enough record accumulates;
+//   * the binding constraint is RECORD LENGTH, not sample rate. A 6.6-tau run
+//     gives a 28.1 s averaging window, which is only ~8 cycles of a 3.6 s
+//     motion. Check N_eff from validation/compare_transients.py before
+//     believing any difference between two runs.
 //
 // Same plane and bounds as trayPlane so the two are directly comparable.
 traySignal

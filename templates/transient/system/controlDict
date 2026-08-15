@@ -47,6 +47,19 @@ maxCo           6;
 // Cap the step even where the flow is quiescent: the hood is nearly stagnant
 // (CLAUDE.md 6.1) so a pure-Courant criterion would happily take a step far too
 // coarse to resolve the jet unsteadiness this run exists to measure.
+//
+// ⚠ SET BY scripts/generate_case.sh -- the 1e-3 below is the Q = 5 m3/h value
+// and is a placeholder that the generator overwrites. It must NOT be a
+// constant: maxDeltaT is a cap on how coarsely the JET is stepped, so it scales
+// with the flow exactly as endTime does,
+//
+//     maxDeltaT = 2.6 * h_port / U_in
+//
+// i.e. a fixed jet Courant number of 2.6 on the port cell. Measured 2026-08-15,
+// leaving it fixed at 1e-3 made a Q = 1.25 m3/h run cost 4x MORE than the same
+// run at Q = 5: the cap bound at max Courant 2.03 against a maxCo of 6, so dt
+// stayed put while endTime grew 4x with tau. See the generator for the full
+// note. maxCo 6 below remains the safety net for the small near-wall cells.
 maxDeltaT       1e-3;
 
 writeControl    adjustableRunTime;

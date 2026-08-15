@@ -16,6 +16,13 @@ Produces, in --out:
     04_slice_z.png      port-centreline cut (z = 66.7 mm): the jet path
     05_slot_zoom.png    close-up of a 2.5 mm tray side slot -- the tightest
                         feature in the mesh, and the one worth checking by eye
+    06_cutaway.png      quarter cutaway, for the overall sense of the volume
+
+Looking at 05 is not optional. A sealed tray slot passes checkMesh cleanly and
+is invisible to every mesh metric except the total volume (CLAUDE.md 7) -- at
+m0 with the template's level-2 tray refinement, snappy closes both slots and
+the only symptom is 15.5 mL of missing volume. Check the number against
+V_air = 2.5302e-3 m3 in log.checkMesh, then check the picture.
 """
 
 import argparse
