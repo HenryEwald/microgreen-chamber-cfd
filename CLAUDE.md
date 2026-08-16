@@ -304,6 +304,27 @@ a mesh or BC problem that Phase 1 would have exposed in 5 minutes.
 > Physically expected in hindsight: a Ø 20 mm port at 4.42 m/s (`Re_port` = 5832) firing into
 > a 12 cm box is a **confined jet, and confined jets flap.** §9.7 anticipated exactly this.
 >
+> > #### ⚠ REFINED 2026-08-15 by the transient — the jet does NOT flap
+> >
+> > The steady evidence (residuals that would not descend) was read as jet flapping. The
+> > time-accurate run says otherwise. Over 14 s of developed flow at `Q` = 1.25 m³/h:
+> >
+> > | probe | mean \|U\| | swing |
+> > |---|---|---|
+> > | jet core | 1.1084 m/s | **0.0 %** |
+> > | mid-chamber, on axis | 1.0990 | 0.1 % |
+> > | off-axis ±30 mm | ~0.026 | 19–32 % |
+> > | **hood** | 0.0454 | **74.7 %** |
+> >
+> > **The jet is steady to four figures.** What is unsteady is the slow recirculation around
+> > it, strongest in the hood — a chamber-scale wander at ≈ 10.8–13.5 s (1.5–1.9 τ), with
+> > **100 % of the spectral power below 1 Hz and 0 % in the `St ≈ 0.3` jet-column band**.
+> >
+> > The conclusion that Phase 1 needs `pimpleFoam` is unchanged — the flow *is* unsteady, and a
+> > steady solver still cannot converge it. What changes is the mechanism, and therefore what a
+> > fix would target: not jet stabilisation, but the recirculation the ports set up. See
+> > `doc/animation_recirc/` and `validation/transient_matrix.md`.
+>
 > **Consequences:**
 > - Phase 1 at this flow rate is `pimpleFoam`, not `simpleFoam` — generate it with
 >   `scripts/generate_case.sh --transient`. The answer is a time average plus a fluctuation
@@ -1406,6 +1427,12 @@ used, and no figure derived from them goes out without the caveat on it.
 | How well is the chamber ventilated? | **Badly — ε_a ≈ 10 %** (perfect mixing 50 %, piston 100 %). Volume-mean age **4.90 τ**, max **10.75 τ**. Severe short-circuiting. ⚠ **Provisional** — non-converged steady field; supersede with `phiMean` from the transient. See `validation/age_of_air.md` | 2026-08-15 |
 | Is the hood the worst-ventilated region, as §6.1 predicts? | **Provisionally NO.** `ageHood` = 4.82 τ against a chamber mean of 4.90 τ — **0.984 of the mean**, not "worst by a wide margin". `ageCanopy` is 4.67 τ, marginally the *best*. The chamber looks **uniformly stale**, not core-plus-dead-cap. ⚠ Same non-converged field, and the gap is smaller than the 9 % scheme uncertainty — **re-check on the transient before amending §6.1** | 2026-08-15 |
 | Where IS the dead air, then? | **On the INLET side, along the floor** — not the hood, and not the outlet side. Volume-averaged age falls monotonically from **6.28 τ** in the first 23 mm to **3.96 τ** in the last: air is **58 % older at the inlet end**. The jet entrains as it crosses, sweeping everything downstream toward the exit, while the pocket *beneath the incoming jet* sits in its shadow with no return path. Worst cell ~11 τ in that corner. The tray spans the whole gradient ⇒ **~55 % variation in air age across the crop**. Indicated fix is the **port arrangement** (angle the inlet down, offset the ports diagonally, add a return path), not jet strength. See `doc/ventilation/` | 2026-08-15 |
+| **PHASE 1 HEADLINE RESULT** | Tray-plane mean speed **0.02947 ± 0.00018 m/s** (correlated-sample SE, 0.6 %), RMS 2.3 %, `N_eff` = 15, over 3.85 τ of a 6.6 τ transient at `Q` = 1.25 m³/h, m0+`--jetRefine`, laminar. The discard window is **validated, not assumed**: the mean plateaus from ~1.5 τ and moves ±0.3 % out to 4 τ. See `validation/transient_matrix.md` | 2026-08-15 |
+| Does the jet actually flap? | **No — the jet is STEADY.** Over 14 s of developed flow the jet core swings **0.0 %** (1.1084 m/s) and the on-axis mid-chamber probe 0.1 %. All the unsteadiness is in the slow recirculation: off-axis ±30 mm swing 19–32 %, and the **hood 74.7 %** on a 0.045 m/s mean. §5.1's "confined jet flapping" framing came from steady runs refusing to converge; the transient shows **a steady jet with a slowly wandering recirculation around it**. Consistent with the spectrum (100 % of power < 1 Hz, 0 % in the `St≈0.3` band) but not the same mechanism | 2026-08-15 |
+| Ventilation efficiency, converged | **ε_a = 10.0 %** (perfect mixing 50 %, piston 100 %). Volume-mean age **4.99 τ**, hood 4.87, canopy 4.76, worst cell 11.26. `ageOutlet` = 0.9995 τ, i.e. the identity holds to **−0.047 %** — that is what certifies the solve. Computed on `phiMean`, not a snapshot. See `doc/ventilation/` | 2026-08-15 |
+| ⚠ `reconstructPar` with no arguments reconstructs NOTHING | It builds its time list from the **case root**, which on a decomposed case holds only `constant` and `0`, and the default excludes `0` (`-withZero`). It warns `No times selected`, **exits 0**, and `Allrun` prints its acceptance checklist. The laminar run finished with only `0/` reconstructed while `processor*/` held 46–48; nothing said so until post-processing went looking. `templates/Allrun` now derives an explicit `-time first:last` from `processor0` **and asserts a time > 0 exists** | 2026-08-15 |
+| ⚠ ParaView renders need the colour scale pinned | `AutomaticRescaleRangeMode` defaults to rescaling per *representation*, so every panel silently gets its own scale — measured, the x-slice came out −0.12…76 and the tray plane 21…68 **from the same field at the same instant**. Set it to `Never`. In an animation the same default makes colour pulse with the normalisation, which reads as motion. `scripts/render_field.py` / `render_animation.py` pin it | 2026-08-15 |
+| Choosing an animation colour scale | **Linear is wrong when a fast jet and a slow recirculation share the frame.** Jet 1.108 m/s at 0.0 % swing vs hood 0.045 m/s at 74.7 %: on a linear 0–1.3 ramp all the unsteadiness sits in the bottom 3 % and the animation looks static. Clip the scale (0–0.08 m/s here) so the jet saturates and the slow field gets the full ramp. Both versions kept in `doc/animation_jet/` and `doc/animation_recirc/` | 2026-08-15 |
 | SMT oversubscription via `FOAM_CPUSET` | `FOAM_CPUSET=0-3` on a case the 50 k floor sized at **8 ranks** packed 8 ranks onto 4 cores: **7.0 s/step vs 2.94 properly placed, a 2.4× loss**, silently. `templates/Allrun` now measures the cpu-set width and refuses to launch if it is narrower than the rank count | 2026-08-15 |
 | Does the Phase 2 / 2b buoyant solver path actually run? | **It did not — `rhoFinal` was missing from the transient `fvSolution`.** `buoyantPimpleFoam` died on time step 1: PIMPLE needs `<field>Final` for every field it solves, and `rho` was a bare entry matching neither `p*Final` nor the `"(U\|k\|omega\|e\|h)Final"` regex. **Phase 1 cannot expose this** — `pimpleFoam` is incompressible and never solves `rho`. Now `"rho.*"`. Found by a deliberate 0.03-τ smoke test; without it the whole Phase 3 sweep would have produced zero time steps | 2026-08-15 |
 | *How* does `kOmegaSST` get its clean convergence? | ⚠ **RETRACTED 2026-08-15.** A matched-time window at 1.04–1.31 τ showed the laminar jet flapping (`r` = −0.36) while the RANS jet was symmetric (`r` = +0.999), suggesting the closure *removes* the instability. **The matched repeat at 1.92–2.19 τ reversed it** (+0.581 vs −0.997). Probe correlation on a 2 s window tracks the phase of a ≥ 8.9 s oscillation, not the presence of one. **Not established.** What survives: the tray mean spread is **~110 %** (+117 %, +107 % at two windows). See `validation/transient_matrix.md` §4a |  2026-08-15 |

@@ -68,6 +68,12 @@ def main():
     ap.add_argument("--out", default="doc/animation")
     ap.add_argument("--from-time", type=float, default=None)
     ap.add_argument("--size", default="1280x900")
+    ap.add_argument("--log", action="store_true",
+                    help="log colour scale -- essential when a fast jet and a slow "
+                         "recirculation share the frame")
+    ap.add_argument("--clip-hi", type=float, default=None,
+                    help="cap the colour scale (m/s); the jet then saturates and "
+                         "the slow field is resolved")
     a = ap.parse_args()
 
     if a.field == "age":
@@ -107,19 +113,37 @@ def main():
         lo = r[0] if lo is None else min(lo, r[0])
         hi = r[1] if hi is None else max(hi, r[1])
     lo = max(0.0, lo)
-    print(f"  shared colour scale: {lo:.4g} .. {hi:.4g}")
+    if a.clip_hi:
+        hi = a.clip_hi
+    # ⚠ A LINEAR scale is the wrong choice when a fast jet and a slow
+    # recirculation share the frame. Measured 2026-08-15: the jet core runs at
+    # 1.108 m/s with a 0.0 % swing over 14 s, while the hood runs at 0.045 m/s
+    # with a 74.7 % swing. On a linear 0..1.3 ramp the jet saturates the display
+    # and ALL of the actual unsteadiness is compressed into the bottom ~3 % of
+    # the colour range, where nothing is distinguishable. The animation then
+    # shows a static picture of a flow that is genuinely moving -- the opposite
+    # of its purpose.
+    if a.log:
+        lo = max(lo, hi * 1e-3)      # log needs a positive floor
+    print(f"  shared colour scale: {lo:.4g} .. {hi:.4g}"
+          f"{'  (LOG)' if a.log else ''}")
 
     lut = GetColorTransferFunction(a.field)
     lut.ApplyPreset("Viridis (matplotlib)", True)
     lut.AutomaticRescaleRangeMode = "Never"
     lut.RescaleTransferFunction(lo, hi)
+    if a.log:
+        lut.UseLogScale = 1
 
     origin, normal, campos, up = SLICES[a.slice]
     view = CreateRenderView()
     view.ViewSize = [w, h]
     view.Background = list(BG)
     view.UseColorPaletteForBackground = 0
-    view.OrientationAxesVisibility = 0
+    # Orientation axes ON. Without them a slice is an unlabelled rectangle and
+    # the viewer cannot tell which end is the inlet -- which is the first thing
+    # anyone asks. The explicit end labels below say it in words as well.
+    view.OrientationAxesVisibility = 1
 
     sl = Slice(Input=c2p)
     sl.SliceType = "Plane"
@@ -146,6 +170,18 @@ def main():
     td.Color = [0.92, 0.92, 0.94]
     td.FontSize = 16
     td.WindowLocation = "Upper Left Corner"
+
+    # Which end is which. The x-slice camera puts +y to screen RIGHT, so the
+    # inlet (y = 0) is on the LEFT -- verified by probing U at both ends, not
+    # inferred from the camera vectors.
+    ends = {"x": "INLET (y=0)  -->  flow  -->  OUTLET (y=187 mm)",
+            "y": "x = 0  (left)  ...  x = 127 mm  (right)",
+            "z": "INLET (y=0) at BOTTOM  -->  OUTLET at TOP"}
+    lbl = Text(Text=ends[a.slice])
+    ld = Show(lbl, view)
+    ld.Color = [0.75, 0.78, 0.82]
+    ld.FontSize = 14
+    ld.WindowLocation = "Lower Left Corner"
 
     view.CameraPosition = list(campos)
     view.CameraFocalPoint = list(origin)
