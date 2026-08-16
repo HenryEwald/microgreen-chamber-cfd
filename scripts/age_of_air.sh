@@ -226,7 +226,7 @@ MAX=$(grep  -h -v '^#' postProcessing/ageMax/*/volFieldValue.dat  2>/dev/null | 
 # tau from the case's own inlet BC, not from a note.
 Q=$(awk '/volumetricFlowRate/{gsub(";","",$2); print $2; exit}' 0.orig/U 2>/dev/null || true)
 if [ -n "$Q" ]; then
-    TAU=$(awk -v q="$Q" 'BEGIN{printf "%.2f", 2.530e-3/q}')
+    TAU=$(awk -v q="$Q" 'BEGIN{printf "%.2f", 2.3296e-3/q}')
     echo "   tau (V_air/Q)      ${TAU} s"
     echo "   age, volume mean   ${MEAN} s   = $(awk -v a="$MEAN" -v t="$TAU" 'BEGIN{printf "%.2f", a/t}') tau"
     echo "   age, max           ${MAX} s   = $(awk -v a="$MAX" -v t="$TAU" 'BEGIN{printf "%.2f", a/t}') tau"

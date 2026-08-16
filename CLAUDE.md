@@ -606,17 +606,75 @@ Values quoted in cm as supplied, metres in brackets because dicts are in metres.
 | Port lateral position | — | **centred on the 12 cm width** (X = 6 cm) | ditto — implied by symmetry |
 | Port construction | — | **simple circular cutouts, flush with the wall** — no stub, duct or flange | ⇒ the inlet BC sits on a flat disc; expect a top-hat profile, not a developed pipe profile |
 | Port Z, internal datum | — | **bottom 5.667 cm, centre 6.667 cm, top 7.667 cm** above the internal floor | 6 cm external − 3.33 mm floor, **confirmed** |
-| Tray | — | **11.5 × 2.5 × 12.5 cm** (W × H × D), modelled as a **box**, sitting **flush on the floor**, centred | top surface at **Z = 2.5 cm**, area **0.014375 m²** |
-| Tray side slots | — | **2.5 mm each side × 2.5 cm tall × 12.5 cm long — OPEN, air passes through** | **confirmed as a real flow path** — must be resolved, see §7 |
-| Tray end gaps | — | **3.08 cm each end**, open | ample; 18 cells at m2 |
-| Total internal volume | — | **2.890 L** = 2.165 box + **0.724 hood** | verified numerically |
-| Free air volume | `V_air` | **2.530 L** [2.530e-3 m³] — tray displaces 0.359 L | the ACH and residence-time denominator |
+| Tray | — | **12 × 2.5 × 18⅔ cm** (W × H × D) — **FLUSH WITH ALL FOUR WALLS, fills the entire internal floor** (design change 2026-08-16) | top surface at **Z = 2.5 cm**, area **0.0224 m²**. Was 11.5 × 2.5 × 12.5 cm, area 0.014375 m² |
+| Tray side slots | — | **GONE.** Were 2.5 mm each side, open | removed 2026-08-16 — see the box below |
+| Tray end gaps | — | **GONE.** Were 3.08 cm each end, open | ditto |
+| Total internal volume | — | **2.890 L** = 2.165 box + **0.724 hood** | verified numerically; unaffected by the tray |
+| Free air volume | `V_air` | **2.3296 L** [2.3296e-3 m³] — tray displaces 0.560 L | the ACH and residence-time denominator. **Was 2.530 L** |
 | Coordinate convention | — | X = 12 cm width, Y = 18⅔ cm depth, **Z vertical, −Z down** — **confirmed** by the 1 g assumption | `constant/g` = `(0 0 -9.81)` |
 | Units in STL | — | `TBD` | CAD is usually mm; OpenFOAM is **m**. `scale 0.001` in snappy |
 
+> ### ⚠ DESIGN CHANGE 2026-08-16 — the tray is FLUSH and fills the whole floor
+>
+> The tray was an inset 11.5 × 2.5 × 12.5 cm box with 2.5 mm open slots down each side and
+> 3.08 cm open gaps at each end. **All of that is gone.** It is now 12 × 2.5 × 18⅔ cm — the
+> full internal footprint, flush against all four walls, a solid block.
+>
+> | | was | now |
+> |---|---|---|
+> | tray footprint | 11.5 × 12.5 cm | **12 × 18⅔ cm** |
+> | tray top area (the metric surface) | 0.014375 m² | **0.0224 m²** |
+> | tray displaced volume | 0.359 L | **0.560 L** |
+> | `V_air` | 2.530 L | **2.3296 L** |
+> | `τ` at `Q` = 1.25 m³/h | 7.29 s | **6.71 s** |
+> | ACH at `Q` = 1.25 m³/h | 494 h⁻¹ | **537 h⁻¹** |
+> | m0 cell count | 380 k | **261 k** |
+>
+> **Consequences that are not just arithmetic:**
+>
+> - **The `floor` patch no longer exists.** The tray covers the floor completely, so `floor`
+>   has zero fluid faces and **snappy drops it from `constant/polyMesh/boundary` entirely.**
+>   The bottom of the fluid domain *is* the tray top; the floor is effectively raised to
+>   z = 25 mm. Verified: `yPlus` reports `walls`/`hood`/`tray` only, and does not error. The
+>   `0.orig` BCs are regexes — `"(floor|walls|hood|tray)"` — so a non-matching alternative is
+>   harmless and **no BC file needed changing.**
+> - **The tray now carries surface layers** (4, matching the walls; measured 3.97 achieved at
+>   85.3 % coverage, better than the walls' 70.1 %). It carried `nSurfaceLayers 0` only because
+>   layers could not be inserted inside a 6-cell-wide slot. **Tray wall shear is reportable for
+>   the first time** — but only on flush-tray cases; every run generated before this date is
+>   still unlayered there.
+> - **`m0` no longer needs its level-3 tray override.** That existed solely to stop snappy
+>   sealing the 2.5 mm slots. Dropping it takes m0 from 380 k to **261 k cells**.
+> - **The headline tray metric is not comparable across the change.** `trayPlane` now averages
+>   over 0.0224 m² *including the near-wall boundary layers*, where the old 0.014375 m² window
+>   sat entirely in the chamber interior. Expect a **lower** mean speed on the flush geometry
+>   for that reason alone. Do not compare it like-for-like with the Phase 1 headline
+>   0.02947 m/s (§10.3).
+> - **Every result in `runs/` and `validation/` predates this** and describes the slotted
+>   geometry. They are not wrong, they are answers about a different chamber. `validation/*.md`
+>   deliberately keeps its original `V_air` = 2.5302e-3 figures for that reason.
+>
+> **Meshing trap, found and fixed 2026-08-16.** The tray STL is written **1 mm oversize** in x,
+> y and downward in z, so its sides and base are buried in the wall material instead of exactly
+> coplanar with it — coincident surfaces leave snappy's snap direction undefined and the usual
+> outcomes (a leak, or a zero-thickness sliver) both pass `checkMesh`. That is correct and
+> necessary, **but it means every edge of `tray.stl` now lies inside solid.** Leaving
+> `tray.eMesh` in snappy's `features` list made explicit feature snapping pull mesh points out
+> onto those buried edges, producing a skirt of cells 1 mm past the chamber walls: patch
+> bounding boxes spanning x = −0.001…0.121 against an internal width of 0…0.120, and a total
+> volume of 2.3300881e-3 m³ against `V_air` 2.3296e-3 — a **0.49 mL excess**, which is exactly
+> perimeter (0.6133 m) × 1 mm × ~0.8 mm. **`tray.eMesh` is deliberately absent from
+> `features`; do not add it back.** With it removed the tray patch bounding box is exactly
+> (0 0 0.025) → (0.12 0.186667 0.025) and total volume is 2.3292652e-3 (−0.34 mL, ordinary
+> surface discretisation).
+>
+> The real feature — the concave corner where the tray top meets each wall — is an
+> intersection of two `refinementSurfaces`, which snappy resolves from the surfaces themselves.
+
 **Terminology — "canopy" is overloaded in this project.** Use **hood** for the curved chamber
 lid (this section) and **plant canopy** for the vegetation (§6.5). Patch names: `hood`,
-`walls`, `floor`, `tray`, `plantCanopy`, `inlet`, `outlet`.
+`walls`, `tray`, `plantCanopy`, `inlet`, `outlet` — **`floor` is defined in the geometry but
+has no faces in a flush-tray mesh** (see the box above).
 
 ### Hood profile — analytic, no CAD required
 
@@ -670,7 +728,11 @@ and §7 (base cell must be ≈ 2 mm, not 10 mm).
 
 ```
   0.00 cm  internal floor        (= 0.33 cm on the external datum)
-  2.50 cm  tray top   ← growing surface, all metrics evaluated here
+           ⚠ NO FLUID HERE since 2026-08-16 — the flush tray fills 0.00→2.50 cm
+             across the whole footprint, so the `floor` patch has zero faces and
+             the fluid domain BEGINS at 2.50 cm
+  2.50 cm  tray top   ← growing surface, all metrics evaluated here, 0.0224 m²
+             ALSO the bottom wall of the fluid domain
   4.50 cm  plant canopy top, young  (20 mm)
   5.67 cm  PORT bottom edge  ────────────
   6.67 cm  port centreline
@@ -702,9 +764,9 @@ object will show this immediately.
 | Fan rating | `Q_free` | **5 m³/h — FREE AIR (zero back-pressure)** | **an upper bound, not the operating point** — see the note below |
 | Operating flow | `Q_op` | **`TBD` — sweep 5 / 2.5 / 1.25 m³/h. WORKING VALUE = 1.25** (default in `generate_case.sh` since 2026-08-14) | the single largest uncertainty in the project now. 1.25 is the bottom rung and the most likely to bracket the real point — see the free-air note below. Still a placeholder, not a measurement |
 | Inlet bulk velocity | `U_in` | `Q / A_port`, `A_port` = 3.1416e-4 m² ⇒ **4.42 / 2.21 / 1.10 m/s** | let `flowRateInletVelocity` compute it; do not hard-code |
-| Chamber bulk velocity | `U_bulk` | `Q` / mid-plane free area (**126.05 cm²** = 116.0 box + 38.8 hood − 28.75 tray) ⇒ **0.110 / 0.055 / 0.028 m/s** | 40× slower than the jet — see the `Ri` note |
-| Air changes per hour | ACH | `Q` ÷ 2.530 L ⇒ **1976 / 988 / 494 h⁻¹** | enormous, but normal for a 2.53 L box |
-| Mean residence time | `τ` | **1.82 / 3.6 / 7.3 s** | the `age` function object should converge near this; much higher ⇒ dead zones |
+| Chamber bulk velocity | `U_bulk` | `Q` / mid-plane free area (**124.8 cm²** = 116.0 box + 38.8 hood − **30.0** tray) ⇒ **0.111 / 0.056 / 0.028 m/s** | 40× slower than the jet — see the `Ri` note. Tray term was 28.75 cm² pre-2026-08-16 |
+| Air changes per hour | ACH | `Q` ÷ **2.3296 L** ⇒ **2146 / 1073 / 537 h⁻¹** | enormous, but normal for a 2.33 L box. Was 1976 / 988 / 494 |
+| Mean residence time | `τ` | **1.68 / 3.35 / 6.71 s** | the `age` function object should converge near this; much higher ⇒ dead zones. **Was 1.82 / 3.6 / 7.3** — the flush tray displaces 0.2 L more air |
 | Port Reynolds number | `Re_port` | `= 1319 · U_in` ⇒ **5 830 / 2 915 / 1 450** | **turbulent / transitional / laminar.** The turbulence model is *not* settled — see §5.2 |
 | Fan curve (Δp vs Q) | — | **`TBD` — needed** | LD3007MS datasheet; enables a `fan`/`fanPressure` BC and an actual operating-point prediction |
 | Inlet turbulence intensity | `I` | `TBD` [5 %] | fan outlet, no stub to develop in; 5–10 % is the usual range |
@@ -987,7 +1049,7 @@ at `y⁺` ≈ 5–15, say so rather than quietly reporting wall heat flux as if 
 
   | Level | Base cell | Background (incl. 1-cell margin) | Final cells | Steady 4000 iter |
   |---|---|---|---|---|
-  | `m0` | 6.667 mm | 19 × 29 × 23 = 12.7 k | **380 k** (measured) | **21.6 min**, 4 ranks |
+  | `m0` | 6.667 mm | 19 × 29 × 23 = 12.7 k | **261 k** (measured, flush tray) | 21.6 min at 380 k, 4 ranks |
   | `m1` | 3.333 mm | 38 × 58 × 45 = 99 k | **1.07 M** (measured) | **55.7 min**, 8 ranks |
   | `m2` | 1.667 mm | 76 × 116 × 90 = 793 k | **5.97 M** (measured) | ~5.2 h, 8 ranks (proj.) |
   | `m3` | 0.833 mm | 152 × 232 × 180 = 6.35 M | **~33 M** (extrapolated) | ⚠ **NOT BUILDABLE** |
@@ -995,11 +1057,13 @@ at `y⁺` ≈ 5–15, say so rather than quietly reporting wall heat flux as if 
   **The independence ladder is `m0`/`m1`/`m2`, running DOWNWARD** (linear ratios `r` = 1.41 and
   1.77, both clearing the `r ≥ 1.3` that GCI wants). See `validation/mesh_independence.md`.
 
-> ### ⚠ `m0` needs level-3 tray refinement or it silently solves a different chamber
+> ### ⚠ OBSOLETE 2026-08-16 — `m0`'s level-3 tray override is REMOVED (flush tray)
 >
-> Measured 2026-08-14. At the template's level 2 the local cell at m0 is 1.667 mm and the
-> 2.5 mm tray side slots get 1.5 cells across — **snappy seals them both.** It is a clean
-> `Mesh OK`, and the *only* symptom is the total volume:
+> Kept because the lesson generalises and is still the only guard against this class of error.
+>
+> Measured 2026-08-14, when the tray still had 2.5 mm side slots. At the template's level 2 the
+> local cell at m0 is 1.667 mm and the slots got 1.5 cells across — **snappy sealed them both.**
+> It was a clean `Mesh OK`, and the *only* symptom was the total volume:
 >
 > | | total volume | vs `V_air` = 2.5302e-3 m³ |
 > |---|---|---|
@@ -1007,16 +1071,15 @@ at `y⁺` ≈ 5–15, say so rather than quietly reporting wall heat flux as if 
 > | the two tray slots | 1.56e-5 m³ | **15.6 mL — 99 % of the deficit** |
 > | m0, tray level 3 | 2.53008e-3 m³ | −0.12 mL ✓ |
 >
-> Level 3 (0.833 mm, 3 cells across) restores the flow path at 205 k → 380 k cells.
-> `scripts/generate_case.sh` applies it automatically for `--mesh m0`.
+> Level 3 restored the flow path at 205 k → 380 k cells, and `generate_case.sh` applied it
+> automatically for `--mesh m0`. **The flush tray has no slots to seal, so the override is gone
+> and m0 is back to level 2 at 261 k cells.**
 >
-> **Always check total volume against `V_air`, not just `Mesh OK`.** A sealed slot is invisible
-> to every other mesh metric. It also does not fail fast: the run dies at the *first write*,
-> when `traySlotFlux` samples a plane that now has no faces — after the solve looks healthy.
->
-> Note this makes the slot cell size 0.833 / 0.833 / 0.417 mm across m0/m1/m2, i.e. the
-> m0 → m1 step does **not** refine the slots, it refines everything else. Deliberate:
-> preserving flow topology beats a uniform refinement ratio on a feature carrying 0.23 % of `Q`.
+> **The habit survives, and it is now the ONLY guard: always check total volume against
+> `V_air`, not just `Mesh OK`.** A sealed feature is invisible to every other mesh metric. It
+> also did not fail fast — the run died at the *first write*, when `traySlotFlux` sampled a
+> plane that had no faces, long after the solve looked healthy. `templates/Allrun` does this
+> check; the same discipline caught the 0.49 mL feature-snapping skirt on the flush tray (§6.1).
 
 > ### ⚠ Measured 2026-08-14 — the earlier estimates in this table were ~5× low
 >
@@ -1152,19 +1215,20 @@ at `y⁺` ≈ 5–15, say so rather than quietly reporting wall heat flux as if 
 > **Do not "fix" this with `bounded Gauss upwind`.** It would converge, by adding numerical
 > diffusion to a jet whose measured problem is already too much diffusion — trading a visible
 > failure for an invisible one. See the note in `fvSchemes`.
-- **The tray side slots are the tightest feature in the mesh, and they are open.** The tray is
-  flush with the floor only, so each 2.5 mm × 2.5 cm × 12.5 cm side slot is a real flow path.
-  At base resolution that is 1.5 cells (m2) / 3 cells (m3) across — **not resolvable**.
-  Mandatory: **local refinement level 2 on the tray surfaces** ⇒ 0.42 mm cells ⇒ **6 cells
-  across the slot** at m2, 12 at m3, plus snappy `gap_detection` (see
-  `tutorials/mesh/snappyHexMesh/gap_detection`). Layer insertion inside a 6-cell slot will
-  fight you — expect to set `nSurfaceLayers 0` on the tray sides, or accept fewer layers
-  there, and check `checkMesh` skewness in that region specifically.
-- **Sanity-check the slots before trusting them.** Two slots of 2.5 × 25 mm = 125 mm² total,
-  vs the 314 mm² port. They are not negligible on area, but they are a high-aspect-ratio,
-  high-resistance path — how much air actually goes through is a result, not an assumption.
-  Put a `surfaceFieldValue` on a slot cross-section and report the split. If it turns out to
-  be < 1 % of `Q`, the refinement can be dropped at m3 and the study gets cheaper.
+- **~~The tray side slots are the tightest feature in the mesh~~ — REMOVED 2026-08-16.** The
+  tray is now flush with all four walls (§6.1), so there are no slots, no end gaps, and
+  nothing below z = 25 mm. The tightest feature in the mesh is now the **port**, and the
+  binding resolution criterion is the jet shear layer (`x_res`, above), not a gap width.
+  Consequences: the level-2 tray surface refinement is kept but is no longer load-bearing;
+  snappy `gap_detection` is not needed; and the tray now takes **4 surface layers** like every
+  other no-slip wall, where it previously took none. **Tray wall shear became reportable with
+  that change** — measured 3.97 layers at 85.3 % coverage at m0, against 70.1 % on the walls.
+  Watch the **tray/wall concave corner** in `checkMesh` instead: that is where two layer
+  stacks now collide, and where layer collapse would show up first.
+- **~~Sanity-check the slots before trusting them~~ — moot.** The answer, for the record, was
+  **≈ 0.23 % of `Q`** (steady m1). That measured a flow path that no longer exists, and the
+  `traySlotFlux` function object that produced it has been deleted — it had to be, because a
+  `sampledSurface` with zero faces kills the run at the first write.
 - The tray is an axis-aligned box ⇒ `blockMesh` blocks or a `searchableBox`; the ports are
   cylinders ⇒ `searchableCylinder`; the hood is a `spline` edge. **No STL anywhere in this
   case**, so `cad/` stays empty and there is no mm→m scaling trap.
@@ -1387,12 +1451,12 @@ used, and no figure derived from them goes out without the caveat on it.
 | Hood rise | 0.5 cm lip + 4.5 cm spline = 5.0 cm | 2026-08-13 |
 | Port construction | plain circular cutouts, no stubs | 2026-08-13 |
 | Port arrangement | one per opposite end face, centred, mirror-symmetric *(inferred)* | 2026-08-13 |
-| Tray | 11.5 × 2.5 × 12.5 cm box, centred on the floor | 2026-08-13 |
+| Tray | ~~11.5 × 2.5 × 12.5 cm box, centred on the floor~~ **SUPERSEDED 2026-08-16: 12 × 2.5 × 18⅔ cm, flush with all four walls, fills the whole floor** | 2026-08-13 |
 | LED location | curved over the hood interior ⇒ **stable stratification**, see §6.3 | 2026-08-13 |
 | Baseline gravity | 1 g Earth, `(0 0 -9.81)`, −Z down | 2026-08-13 |
 | Total internal height | **14⅔ cm** floor → hood peak; **no flat ceiling** | 2026-08-13 |
 | Hood profile | **parabola**, `y = 4.5·[1 − ((x−6.3335)/6.3335)²]` external; analytic internal offset | 2026-08-13 |
-| Tray side slots | **open** — tray is flush with the floor only ⇒ must be meshed | 2026-08-13 |
+| Tray side slots | ~~**open** — tray is flush with the floor only ⇒ must be meshed~~ **REMOVED 2026-08-16 — the tray is flush with the walls too, there are no slots** | 2026-08-13 |
 | Port Z datum | measured from the **external base** | 2026-08-13 |
 | Fan | **LD3007MS**, 5 m³/h **free air** — an upper bound, not the operating point | 2026-08-13 |
 | Hood internal surface | 3.33 mm normal offset ⇒ internal height **14⅓ cm**, span 12.0 cm | 2026-08-13 |
@@ -1403,7 +1467,7 @@ used, and no figure derived from them goes out without the caveat on it.
 | Turbulence model | **still open** — depends on delivered `Q`; see §5.2 table | 2026-08-13 |
 | **Is the flow steady at `Q` = 5 m³/h?** | **No.** Confined jet flapping; `simpleFoam` will not converge. Use `--transient`. See §5.1 | 2026-08-14 |
 | `y⁺` regime | **Viscous sublayer, not the buffer band** — area-averages 0.35–1.24 at m1/5 m³/h. §7's warning is pessimistic | 2026-08-14 |
-| Tray side-slot flow split | **≈ 0.23 % of `Q`** (steady m1, provisional — confirm on the transient). Under §7's 1 % threshold for dropping the level-2 slot refinement at m3 | 2026-08-14 |
+| Tray side-slot flow split | ~~**≈ 0.23 % of `Q`** (steady m1)~~ **MOOT 2026-08-16** — measured a flow path the flush tray removed. The `traySlotFlux` FO is deleted | 2026-08-14 |
 | Concave cells in `checkMesh -allGeometry` | **Accepted, not a defect** — the test flags planar as well as folded cells at a 1e-6 tolerance and is excluded from default `checkMesh`. Max cell openness 5e-16. `Allrun` gates on the standard pass | 2026-08-14 |
 | Does the two-box `traySlots` rewrite save cells? | **No — 0.49 %**, not "substantially". Controlled A/B at m1. The cells are in `refinementSurfaces` (+531 k) and layers (+302 k, +39 %). See §7 | 2026-08-14 |
 | Coarsest mesh that divides the geometry exactly | **`m1`** — GCD of the internal dims is exactly the m1 base cell. `m0` is 2.2 % anisotropic in z and that is fine | 2026-08-14 |
@@ -1439,9 +1503,15 @@ used, and no figure derived from them goes out without the caveat on it.
 | Is the unsteadiness a jet-column instability (`St ≈ 0.3`)? | **No.** That mode would sit at 16.6 Hz; measured, the 5–30 Hz band holds **0.0 %** of the power against **100 %** below 1 Hz, with Nyquist at 255 Hz so the band is well resolved. It is a **chamber-scale recirculation, period ≈ 10.8 s ≈ 1.5 τ** (resolved on a 21.5 s record; order-of-magnitude). `functions/transientMonitors` is corrected. **The binding constraint is RECORD LENGTH, not sample rate** — 6.6 τ gives only ≈ 2.6 cycles | 2026-08-15 |
 | Is `bounding k` in the RANS arm a problem? | **No, when it is flat.** The kOmegaSST arm emits ~11,000 `bounding k` messages; `max(k)` sits at ~0.054 for the whole run and the clipped `min` is **positive** (3e-16, below `kMin`) — the solver is flooring near-zero `k` in cells where turbulence has decayed, expected at `Re_port` = 1458. Distinguish from the documented divergence (`k` → 1e105) by checking whether `max(k)` **grows**, not by counting messages. See `validation/transient_matrix.md` §4a-bis | 2026-08-15 |
 | ⚠ Statistics on short windows | **A statistic computed over a window shorter than the flow's own timescale reports the window, not the physics.** Bit this project twice in one day: the spectral peak sat at `1/T` for every record length tried, and probe correlation `r` swung +0.99 → −0.99 → −0.13 across successive 2 s windows against a ≥ 8.9 s timescale. The `r` version produced a plausible result **agreeing with the §5.2 prior**, which is why it was believed. Withdrawn: "flapping onsets at 1.05 τ" and "kOmegaSST suppresses the instability" | 2026-08-15 |
-| Do old cases in `runs/` drift after a template fix? | **Yes, silently.** `p1_transient_m1` predates the `maxDeltaT` fix and still carries `1e-3` where 4.901e-4 is correct — it would step **2× too coarse in the jet** while reporting a comfortable max Courant, because `maxCo 6` is never reached. `validation/audit_cases.sh` checks every case against what the current generator would produce, and exits 1 if any is stale. Regenerate rather than hand-edit (§1.3) | 2026-08-15 |
+| Do old cases in `runs/` drift after a template fix? | **Yes, silently.** `p1_transient_m1` predates the `maxDeltaT` fix and still carries `1e-3` where 4.901e-4 is correct — it would step **2× too coarse in the jet** while reporting a comfortable max Courant, because `maxCo 6` is never reached. `validation/audit_cases.sh` checks every case against what the current generator would produce, and exits 1 if any is stale. **Extended 2026-08-16 to byte-compare each case's `tray.stl` against a freshly generated one** — after the flush-tray change 11 of 13 cases describe a different chamber, and nothing else says so. Regenerate rather than hand-edit (§1.3) | 2026-08-15 |
 | Are the sweep drivers usable as written? | **No — both rewritten.** `sweep_gravity.sh` and `sweep_Q.sh` were **steady, on `m2`, kOmegaSST by default**; every case would have failed to converge at ~5 h each. Now `m0 --jetRefine --transient`, model from `Re_port`, with cost warnings and `GVALS`/`QVALS`/`MESH` env overrides. See §10.4 | 2026-08-15 |
 | LED ceiling at the **working** `Q` | **~1.3 W, not ~8 W.** §6.3's table is at `Q` = 5; `ΔT` ∝ 1/`Q` and the working `Q` is 1.25, so the default pair (38.4 W, 1.25 m³/h) gives **ΔT = 91.7 K ⇒ 112 °C** — ~30× over budget, not the 43 °C the table implies. `generate_case.sh` now warns at generation time. **The binding design problem is thermal, not fluid-dynamic** | 2026-08-15 |
+| **Tray geometry** | **CHANGED 2026-08-16 by design decision: flush with all four walls, filling the entire internal floor.** No side slots, no end gaps. `V_air` 2.530 → **2.3296 L**, τ at `Q` = 1.25 7.29 → **6.71 s**, tray metric area 0.014375 → **0.0224 m²**, m0 380 k → **261 k cells**. See the box in §6.1 | 2026-08-16 |
+| Does the `floor` patch survive a flush tray? | **No — snappy drops it entirely.** Zero fluid faces, so it is absent from `constant/polyMesh/boundary`; the fluid domain now begins at the tray top, z = 25 mm. Harmless: the `0.orig` BCs are regexes (`"(floor\|walls\|hood\|tray)"`) and a non-matching alternative needs no edit. Verified by a solver smoke test — `yPlus` reports walls/hood/tray and does not error | 2026-08-16 |
+| Can the tray carry surface layers now? | **Yes, and it does — 4, matching the walls.** `nSurfaceLayers 0` existed only because layers would not fit in a 6-cell slot. Measured at m0: **3.97 layers, 85.3 % coverage**, better than the walls' 70.1 %. **Tray wall shear is reportable on flush-tray cases** — and only those | 2026-08-16 |
+| ⚠ Why is `tray.eMesh` missing from snappy `features`? | **Deliberate — putting it back corrupts the mesh.** The flush tray is written 1 mm oversize so its faces are not coplanar with the walls, which means every one of its edges is buried in solid. Explicit feature snapping then drags mesh points onto them, leaving a **skirt 1 mm past the chamber walls** (patch bboxes x = −0.001…0.121) and a **+0.49 mL** volume excess = perimeter × 1 mm × 0.8 mm. Removing it gives an exactly flat tray patch and −0.34 mL. Caught by the volume check, invisible to `Mesh OK` | 2026-08-16 |
+| Is the flush-tray tray metric comparable to the old one? | **No.** `trayPlane` now averages over 0.0224 m² *including the near-wall boundary layers*; the old 0.014375 m² window sat entirely in the interior. Expect a lower mean speed from the window change alone. **Do not compare against the 0.02947 m/s Phase 1 headline like-for-like** | 2026-08-16 |
+
 ### 10.4 Needed later, not blocking anything now
 
 > ### ⚠ 2026-08-15 — Phase 3 is a 4–6 DAY compute job, not an afternoon. Scope it deliberately.
@@ -1483,7 +1553,8 @@ used, and no figure derived from them goes out without the caveat on it.
 8. **What decides "good"?** Uniformity of velocity over the tray? A minimum air speed at
    canopy level? ACH? Temperature spread? The objective function should be defined before
    optimising anything. **Now answerable in concrete terms** — the metric surface is the
-   0.014375 m² tray top at Z = 2.5 cm.
+   **0.0224 m²** tray top at Z = 2.5 cm (the full internal floor since the tray went flush,
+   2026-08-16; it was 0.014375 m²).
 9. Is the chamber sealed or leaky? Affects whether inlet/outlet fluxes must balance exactly.
 10. **Wall thermal BC** — adiabatic, or does the enclosure lose heat to the room? Matters more
     than usual here because the LED heats the ceiling (§6.3): if the walls are adiabatic, the

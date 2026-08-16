@@ -38,7 +38,35 @@ import paraview.servermanager
 from paraview.simple import *  # noqa: F401,F403
 
 BG = (0.10, 0.11, 0.13)
-V_AIR = 2.530e-3          # m3, CLAUDE.md 6.1
+
+# Fallback ONLY -- v_air() prefers the case's own meshed volume. Current
+# geometry is the flush tray, 2026-08-16 (the slotted tray it replaced was
+# 2.530e-3). See validation/transient_matrix.md 3b.2: a constant describes the
+# geometry at import time, the mesh describes what the solver integrated, and
+# the two diverged when the tray went flush. Every pre-2026-08-16 case in runs/
+# is the slotted geometry, so the constant understates their tau by 8.6 % -- and
+# tau is what this script annotates every colour bar and every panel with.
+V_AIR_FALLBACK = 2.3296e-3   # m3
+
+
+def v_air(case):
+    """Free air volume from the case's own checkMesh, if it can be found.
+
+    --case usually points at <case>/ageEval (the age solve's scratch copy), so
+    look there and then one level up.
+    """
+    import re
+    for d in (case, os.path.dirname(os.path.normpath(case))):
+        log = os.path.join(d, "log.checkMesh")
+        if not os.path.isfile(log):
+            continue
+        with open(log) as fh:
+            # Must end on a digit: checkMesh writes "Total volume = 0.00253.
+            # Cell volumes OK." and a trailing [0-9.] class eats the full stop.
+            m = re.findall(r"Total volume = ([-+0-9.eE]*[0-9])", fh.read())
+        if m:
+            return float(m[-1]), log
+    return V_AIR_FALLBACK, None
 
 
 def new_view(size=(1600, 1100)):
@@ -152,12 +180,28 @@ def main():
     ap.add_argument("--out", default="doc/ventilation")
     ap.add_argument("--q", type=float, default=3.472222e-4,
                     help="volumetric flow [m3/s], for the tau annotation")
+    ap.add_argument("--v-air", type=float, default=None,
+                    help="free air volume [m3]; default reads the case's checkMesh")
+    ap.add_argument("--range", type=float, nargs=2, metavar=("LO", "HI"), default=None,
+                    help="force the colour range [s]. REQUIRED when rendering two "
+                         "cases to be looked at side by side: auto-scaling gives "
+                         "each its own range, so the same colour means a different "
+                         "age in each set -- the AutomaticRescaleRangeMode trap "
+                         "(see make_lut) one level up, between documents instead "
+                         "of between panels.")
     a = ap.parse_args()
 
-    tau = V_AIR / a.q
+    if a.v_air is not None:
+        vair, src_log = a.v_air, "--v-air"
+    else:
+        vair, src_log = v_air(a.case)
+        src_log = src_log or f"FALLBACK CONSTANT {V_AIR_FALLBACK:.5g}"
+    tau = vair / a.q
     os.makedirs(a.out, exist_ok=True)
     src, c2p, t = load(a.case, a.field, a.time)
-    print(f"case {a.case}  field {a.field}  time {t}  tau {tau:.3f} s")
+    print(f"case {a.case}  field {a.field}  time {t}")
+    print(f"  V_air {vair:.7g} m3  (from {src_log})")
+    print(f"  Q {a.q:.6g} m3/s  ->  tau {tau:.4f} s")
 
     raw_lo, hi = field_range(src, a.field, t)
     print(f"  raw range: {raw_lo:.4g} .. {hi:.4g}  "
@@ -172,8 +216,21 @@ def main():
     if raw_lo < 0:
         print(f"  clamping colour floor {raw_lo:.3g} -> 0 "
               f"(scheme overshoot, not physical)")
-    print(f"  colour range: {lo:.4g} .. {hi:.4g}  "
-          f"({lo/tau:.2f} .. {hi/tau:.2f} tau)")
+    if a.range is not None:
+        data_hi = hi
+        lo, hi = a.range
+        print(f"  colour range FORCED to {lo:.4g} .. {hi:.4g} "
+              f"({lo/tau:.2f} .. {hi/tau:.2f} tau)")
+        # Only the high side is worth warning about. A small negative raw_lo is
+        # limitedLinear overshoot, already reported and already clamped above;
+        # re-flagging it here would cry wolf on every single render.
+        if data_hi > hi:
+            print(f"  !! data max {data_hi:.4g} EXCEEDS the forced ceiling "
+                  f"{hi:.4g} -- the worst-ventilated volume is clamped flat "
+                  f"and this render understates it")
+    else:
+        print(f"  colour range: {lo:.4g} .. {hi:.4g}  "
+              f"({lo/tau:.2f} .. {hi/tau:.2f} tau)")
     lut, pwf = make_lut(a.field, lo, hi, tau)
 
     # Volume-weighted mean, for the dead-volume threshold. IntegrateVariables

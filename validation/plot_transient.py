@@ -41,16 +41,41 @@ INK_2 = "#52514e"
 INK_MUTED = "#8a8880"
 
 
+def _restart_paths(case, fo_name, fname):
+    """Every output file of one function object, in the order to consume them.
+
+    Two things make this more than a glob:
+
+    * A resumed run adds a directory, postProcessing/<fo>/<startTime>/<file>.
+    * If that directory ALREADY exists -- i.e. the resume itself was resumed, or
+      an earlier resume attempt aborted -- OpenFOAM does not overwrite. It writes
+      `<stem>_<startTime>.dat` alongside the original. Globbing the bare
+      `surfaceFieldValue.dat` therefore silently reads the ABANDONED stub and
+      drops the real segment. Measured on p1_trans_q1p25_m0_kom_jet: the stub
+      held 140 rows ending at 43.7745 s while `surfaceFieldValue_43.5.dat` held
+      2351 rows out to 48.1098 s, so the last 0.63 tau of a 25-hour run went
+      missing from every statistic with nothing to indicate it.
+
+    Ordered by (directory time, mtime) so that at a duplicated timestamp the
+    most recently written file is consumed last -- read_series keeps the last
+    value at each time, so that is the one that survives.
+    """
+    stem, _, ext = fname.rpartition(".")
+    pattern = f"{stem}*.{ext}" if stem else f"{fname}*"
+    paths = glob.glob(str(case / "postProcessing" / fo_name / "*" / pattern))
+    return sorted(
+        paths,
+        key=lambda p: (float(pathlib.Path(p).parent.name), pathlib.Path(p).stat().st_mtime),
+    )
+
+
 def read_series(case, fo_name, fname="surfaceFieldValue.dat", ncols=1):
     """Concatenate a function object's output across restart directories.
 
     postProcessing/<fo>/<startTime>/<file> -- a resumed run adds a directory
     rather than appending, and they must go together in time order.
     """
-    paths = sorted(
-        glob.glob(str(case / "postProcessing" / fo_name / "*" / fname)),
-        key=lambda p: float(pathlib.Path(p).parent.name),
-    )
+    paths = _restart_paths(case, fo_name, fname)
     if not paths:
         return None, None
     t, v = [], []
@@ -71,10 +96,7 @@ def read_series(case, fo_name, fname="surfaceFieldValue.dat", ncols=1):
 
 def read_probes(case, fo_name="jetProbes", field="U"):
     """probes writes `time (ux uy uz) (ux uy uz) ...`, one column per probe."""
-    paths = sorted(
-        glob.glob(str(case / "postProcessing" / fo_name / "*" / field)),
-        key=lambda p: float(pathlib.Path(p).parent.name),
-    )
+    paths = _restart_paths(case, fo_name, field)
     if not paths:
         return None, None
     t, rows = [], []
@@ -87,6 +109,10 @@ def read_probes(case, fo_name="jetProbes", field="U"):
             rows.append(nums[1:])
     t = np.array(t)
     a = np.array(rows)
+    # Same restart-overlap rule as read_series: keep the last row at each time.
+    _, keep = np.unique(t[::-1], return_index=True)
+    keep = len(t) - 1 - keep
+    t, a = t[keep], a[keep]
     return t, a.reshape(len(t), -1, 3)
 
 
@@ -97,13 +123,40 @@ def avg_start(case):
     return float(m.group(1)) if m else 0.0
 
 
-# CLAUDE.md 6.1 -- free air volume, the residence-time denominator. The tray
-# displaces 0.359 L of the 2.890 L internal volume.
-V_AIR = 2.530e-3  # m3
+# CLAUDE.md 6.1 -- free air volume, the residence-time denominator. Fallback
+# ONLY; v_air() below prefers the case's own meshed volume. Current geometry is
+# the flush tray, 2026-08-16 (the slotted tray it replaced was 2.530e-3).
+V_AIR_FALLBACK = 2.3296e-3  # m3
+
+
+def v_air(case):
+    """Free air volume, from the case's OWN checkMesh rather than a constant.
+
+    Same argument as tau() makes for Q: the mesh is what the solver actually
+    integrated, a module-level constant is what someone believed at import time.
+    The two diverged on 2026-08-16, when the tray went flush with all four walls
+    and V_air dropped 2.530e-3 -> 2.3296e-3 (CLAUDE.md 6.1). Every case already
+    in runs/ predates that and carries the 2.530e-3 geometry, so the constant
+    understated their tau by 8.6 % -- which inflates every window measured in
+    tau and silently makes a marginally-sampled average look converged, exactly
+    the failure the hard-coded 1.82 s caused before it.
+
+    Cross-check available for free on any age solve: <age>_outlet == tau
+    identically for a converged steady flow (CLAUDE.md 10.3). The kOmegaSST arm
+    measures 7.28327 s against the 7.2867 s this returns, i.e. -0.047 %.
+    """
+    log = case / "log.checkMesh"
+    if log.exists():
+        # Must end on a digit: checkMesh writes "Total volume = 0.00253.  Cell
+        # volumes OK." and a trailing [0-9.] class swallows the full stop.
+        m = re.findall(r"Total volume = ([-+0-9.eE]*[0-9])", log.read_text())
+        if m:
+            return float(m[-1])
+    return V_AIR_FALLBACK
 
 
 def tau(case):
-    """Residence time V_air / Q, derived from the case's own inlet BC.
+    """Residence time V_air / Q, derived from the case's own inlet BC and mesh.
 
     Read from 0.orig/U rather than taken as a constant: tau scales as 1/Q, so
     the 1.82 s that was hard-coded here (correct only at Q = 5 m3/h) understated
@@ -117,7 +170,7 @@ def tau(case):
     if not m:
         return None
     q = float(m.group(1))
-    return V_AIR / q if q else None
+    return v_air(case) / q if q else None
 
 
 def psd(t, y):

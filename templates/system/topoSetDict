@@ -23,7 +23,17 @@ actions
         type        cellSet;
         action      new;
         source      boxToCell;
-        box         (0.0025 0.0308335 0.025) (0.1175 0.1558335 0.075);
+        // FULL internal footprint as of 2026-08-16. The tray is flush with all
+        // four walls and covers the whole floor, so the growing area is the
+        // entire 120 x 186.667 mm cross-section, not the old inset
+        // 115 x 125 mm box. z is unchanged: tray top (25 mm) to a mature
+        // 50 mm canopy (75 mm).
+        //
+        // Bounds run 1 mm past the walls deliberately -- boxToCell takes cell
+        // CENTRES, so a box ending exactly on the wall drops the near-wall
+        // cells and biases the zone away from precisely the region where the
+        // canopy meets the wall.
+        box         (-0.001 -0.001 0.025) (0.121 0.187667 0.075);
     }
     {
         name        canopyZone;

@@ -12,17 +12,19 @@ Produces, in --out:
                         and tray came out where CLAUDE.md 6.1 says they should
     02_slice_x.png      mid-width cut (x = 60 mm): hood profile, tray, the
                         vertical stack-up
-    03_slice_y.png      mid-depth cut (y = 93.3 mm): tray side slots
+    03_slice_y.png      mid-depth cut (y = 93.3 mm): tray, walls, hood
     04_slice_z.png      port-centreline cut (z = 66.7 mm): the jet path
-    05_slot_zoom.png    close-up of a 2.5 mm tray side slot -- the tightest
-                        feature in the mesh, and the one worth checking by eye
+    05_tray_wall_junction.png
+                        close-up of the tray-top/side-wall corner -- where the
+                        two 4-layer stacks meet, and the first place layer
+                        collapse shows up
     06_cutaway.png      quarter cutaway, for the overall sense of the volume
 
-Looking at 05 is not optional. A sealed tray slot passes checkMesh cleanly and
-is invisible to every mesh metric except the total volume (CLAUDE.md 7) -- at
-m0 with the template's level-2 tray refinement, snappy closes both slots and
-the only symptom is 15.5 mL of missing volume. Check the number against
-V_air = 2.5302e-3 m3 in log.checkMesh, then check the picture.
+ALWAYS check total volume against V_air = 2.3296e-3 m3 in log.checkMesh, not
+just "Mesh OK". The tray no longer has side slots for snappy to seal, but the
+lesson that produced this warning still stands: a sealed feature is invisible to
+every mesh metric except the volume. At m0 with level-2 tray refinement snappy
+used to close both 2.5 mm slots, and the only symptom was 15.5 mL missing.
 """
 
 import argparse
@@ -155,10 +157,18 @@ def main():
                camera=([0.06, 0.0933, 0.5], [0.06, 0.0933, 0.066667],
                        [0, 1, 0]))
 
-    # -- 5. close-up of a tray side slot -----------------------------------
-    # The 2.5 mm slot is the tightest feature in the mesh and the one CLAUDE.md 7
-    # says is unresolvable at base size. Count the cells across it by eye.
-    view = new_view((900, 1300))     # portrait: the slot is 2.5 mm in a 25 mm stack
+    # -- 5. close-up of the tray/wall junction ------------------------------
+    # RETARGETED 2026-08-16. This used to frame a 2.5 mm tray side slot, the
+    # tightest feature in the mesh. The flush tray has no slots, so the feature
+    # worth checking by eye is now the CONCAVE CORNER where the tray top meets
+    # the side wall: since the tray went from nSurfaceLayers 0 to 4, two layer
+    # stacks collide there, and a concave corner is where layer collapse and
+    # sliver cells show up first.
+    #
+    # What good looks like: 4 layers running along the tray top, 4 up the wall,
+    # meeting without either stack pinching out or folding. checkMesh's layer
+    # coverage summary is the number; this is the picture behind it.
+    view = new_view((900, 1300))     # portrait: the layer stack is thin and tall
     sl = Slice(Input=src)
     sl.SliceType = "Plane"
     sl.SliceType.Origin = [0, 0.0933, 0]
@@ -170,13 +180,13 @@ def main():
     d.EdgeColor = list(EDGE)
     d.LineWidth = 1.4
     view.InteractionMode = "2D"
-    view.CameraPosition = [0.005, -0.4, 0.0135]
-    view.CameraFocalPoint = [0.005, 0.0933, 0.0135]
+    view.CameraPosition = [0.008, -0.4, 0.027]
+    view.CameraFocalPoint = [0.008, 0.0933, 0.027]
     view.CameraViewUp = [0, 0, 1]
-    # 34 mm tall x 23.5 mm wide: floor, the full slot, the tray wall and the
-    # tray top all in one frame, with the slot still ~90 px across.
-    view.CameraParallelScale = 0.017
-    save(view, os.path.join(out, "05_slot_zoom.png"))
+    # 24 mm tall x 16.6 mm wide, centred on the junction: enough tray top and
+    # enough wall on either side of the corner to see both layer stacks resolve.
+    view.CameraParallelScale = 0.012
+    save(view, os.path.join(out, "05_tray_wall_junction.png"))
     Delete(sl)
     Delete(view)
 

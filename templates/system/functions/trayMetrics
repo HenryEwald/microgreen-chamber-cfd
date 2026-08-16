@@ -2,7 +2,8 @@
 | The metric surface -- CLAUDE.md 10.4 Q8                                      |
 |                                                                              |
 | Everything this project is trying to answer is evaluated on the tray top:     |
-| 0.014375 m^2 at z = 25 mm. These are the monitored quantities that must be    |
+| 0.0224 m^2 at z = 25 mm -- the FULL internal floor footprint since the tray   |
+| went flush on 2026-08-16 (it was 0.014375 m^2). These are the quantities      |
 | FLAT over the last N iterations before a run counts (CLAUDE.md 9.5).          |
 |                                                                              |
 | "What decides good?" is still open. Until it is answered these three are the  |
@@ -55,7 +56,18 @@ trayPlane
             point   (0.06 0.0933 0.030);
             normal  (0 0 1);
         }
-        bounds      (0.0025 0.0308 0) (0.1175 0.1558 1);
+        // FULL internal footprint since the tray went flush (2026-08-16). Was
+        // (0.0025 0.0308 0) (0.1175 0.1558 1), the old inset tray. The sample
+        // plane is clipped by the mesh anyway, so running the bounds 1 mm past
+        // the walls just guarantees no edge face is dropped.
+        //
+        // ⚠ This CHANGES THE METRIC, it does not merely widen it. The headline
+        // tray-plane mean is now an average over 0.0224 m2 including the
+        // near-wall boundary layers, where the old 0.014375 m2 window sat
+        // entirely in the chamber interior. Expect a LOWER mean speed on the
+        // flush geometry for that reason alone -- it is not comparable
+        // like-for-like with the 0.02947 m/s Phase 1 headline result.
+        bounds      (-0.001 -0.001 0) (0.121 0.187667 1);
         interpolate true;
     }
     operation       areaAverage;

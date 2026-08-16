@@ -99,7 +99,7 @@ cat <<'EOF'
 # ACCEPTANCE -- CLAUDE.md 9. State these explicitly.
 ############################################################
   1. checkMesh passed                     grep '^Mesh OK' runs/<case>/log.checkMesh
-  2. total volume == V_air 2.5302e-3      grep 'Total volume' runs/<case>/log.checkMesh
+  2. total volume == V_air 2.3296e-3      grep 'Total volume' runs/<case>/log.checkMesh
                                           (a sealed tray slot is invisible to
                                            every other mesh metric -- CLAUDE.md 7)
   3. mass balance closes                  postProcessing/inletFlux + outletFlux

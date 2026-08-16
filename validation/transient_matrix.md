@@ -1,6 +1,9 @@
 # Phase 1 transient matrix — Q = 1.25 m³/h
 
-**Status: running, started 2026-08-15.** Numbers land here as the arms finish.
+**Status: both jet arms complete 2026-08-16.** `p1_trans_q1p25_m0_lam_jet` (62 s) and
+`p1_trans_q1p25_m0_kom_jet` (48.11 s = 6.60 τ) are done and analysed — **the model-spread
+question is answered, §4e**. `p1_trans_q1p25_m0_lam` (the numerical-damping arm, §4c) is the
+one still outstanding.
 
 ---
 
@@ -15,7 +18,9 @@ later in this document; nothing here is a claim without a measurement behind it.
 |---|---|---|
 | The unsteadiness is **chamber-scale, not a jet-column instability**. `St ≈ 0.3` is the wrong model | 0.0–0.2 % of power in the 5–30 Hz band, Nyquist 255 Hz so the band *is* resolved | §4 |
 | The dominant motion is a **chamber-scale recirculation, period ≈ 10.8 s ≈ 1.5 τ** — so the averaging window holds only **≈ 2.6 cycles** | resolved at a 21.5 s record (peak cleared the window fundamental); order-of-magnitude, pinned to ~1 frequency bin | §4 |
-| The **model spread on tray mean speed is ~110 %** | +117 % and +107 % at two independent matched-time windows | §4a |
+| The **model spread on tray mean speed is +76.2 %** (laminar 0.02947 vs kOmegaSST 0.05191 m/s) | matched 3.85 τ time average, both arms complete; clears its combined SE by **72×** | **§4e** |
+| kOmegaSST reports a **2.7× better-ventilated chamber** (ε_a 27.4 % vs 10.1 %) — the over-diffusion artefact reaches the headline design metric, not just the velocity | mean age 1.82 τ vs 4.96 τ, both on `phiMean`, both certified by `ageOutlet`/τ = −0.05 % | **§4e** |
+| ~~The model spread is ~110 %~~ — **superseded**, biased high by short windows | +117 %/+107 % came from 2 s matched windows; 89 % came from non-converged steady runs | §4a, §4e |
 | ⚠ **Any statistic on a window shorter than the ≈ 10.8 s period reports the window, not the flow** | probe correlation `r` swings +0.99 → −0.99 → −0.13 across successive 2 s windows (≈ 0.2 of a cycle) | §4a |
 | `buoyantPimpleFoam` **was broken** (`rhoFinal` missing); both buoyant solvers now verified | died on time step 1; fixed as `"rho.*"`, smoke tests pass | §4b |
 | Phase 3 costs **~50 h/case ⇒ ~250 h** for the full 4-`g` sweep | buoyant measured at 2.9× the isothermal per-step cost | §4b |
@@ -24,13 +29,23 @@ later in this document; nothing here is a claim without a measurement behind it.
 
 | finding | why provisional |
 |---|---|
-| Mean age **4.96 τ**, ε_a ≈ **10 %**, hood at **0.97** of the chamber mean — i.e. uniformly stale, **not** the hood-as-dead-zone that §6.1 predicts | `phiMean` had averaged only 0.06 τ at the time of writing | `age_of_air.md` |
+| ~~Mean age 4.96 τ, ε_a ≈ 10 %~~ — **CONFIRMED 2026-08-16** on a fully averaged `phiMean` (3.85 τ), and independently in the kOmegaSST arm. Promoted to Established | — |
+
+**Established by the completed matrix (2026-08-16)**
+
+| finding | evidence | where |
+|---|---|---|
+| The chamber is **badly ventilated — ε_a = 10.1 %**, mean age 4.96 τ, worst cell 10.6 τ | laminar arm, `phiMean` over 3.85 τ; `ageOutlet`/τ = −0.045 % certifies the solve | §4e |
+| The **hood is not the dead zone** §6.1 predicts — hood/mean = **0.97** (laminar) and **0.94** (kOmegaSST) | two independent closures agree, both on converged `phiMean` | §4e |
+| **The kOmegaSST arm relaxes to a STEADY state** — fluctuation decays **30×** over 4 cycles while the laminar arm stays flat (1.05–1.12×). The comparison is a steady flow against an oscillating one | windowed amplitude, six windows, controlled against the laminar arm; 52× less pixel motion in the rendered frames | **§4f** |
+| That also explains `N_eff` = 6.3, `T_int` 2.36× larger, and the mean "still drifting" −0.7 % — **all three are physical relaxation, not statistical under-sampling** | a decaying trend has a long autocorrelation by construction | **§4f** |
+| The **chamber-scale recirculation is a property of the chamber, not the closure** — period 9.35 s in RANS vs 10.49 s laminar, one frequency bin apart | two closures 6× apart in effective viscosity give the same period; corroborates §4's ≈ 10.8 s independently | §4e |
 
 **Retracted during the session — recorded so they are not re-derived**
 
 | withdrawn claim | how it failed |
 |---|---|
-| "`kOmegaSST` **suppresses** the instability outright" (from `r` = −0.36 laminar vs +0.999 RANS at 1.04–1.31 τ) | the matched repeat at 1.92–2.19 τ **reversed** it: +0.581 laminar vs −0.997 RANS. Both arms show both states — `r` on a 2 s window tracks oscillation *phase*, not state. §4a |
+| "`kOmegaSST` **suppresses** the instability outright" (from `r` = −0.36 laminar vs +0.999 RANS at 1.04–1.31 τ) | the matched repeat at 1.92–2.19 τ **reversed** it: +0.581 laminar vs −0.997 RANS. Both arms show both states — `r` on a 2 s window tracks oscillation *phase*, not state. §4a. **⚠ The retraction of this EVIDENCE stands, but the conclusion was independently established 2026-08-16 on an amplitude-decay measurement over 4 cycles with a control arm — see §4f. Do not cite the `r` numbers; cite §4f.** |
 | "Flapping **onsets at ≈ 1.05 τ**" | same metric, same flaw; and the four windows shared an endpoint so were not independent. §4 |
 
 Both were flagged provisional when written and both were killed by the test that was named at
@@ -40,9 +55,14 @@ first one feel solid enough to write down.
 
 **Scope consequences you should decide on**
 
-- **This run answers the model-spread question (~110 %) and cannot answer the mesh question
-  (0.3 %)** — at ≈ 2.6 independent cycles, mesh-level differences are below the noise floor of
-  any record of affordable length. Reporting them as resolved would be wrong. See §4.
+- **This matrix answers the model-spread question (+76.2 %, §4e) and cannot answer the mesh
+  question (0.3 %)** — at ≈ 3 independent cycles, mesh-level differences are below the noise
+  floor of any record of affordable length. Reporting them as resolved would be wrong. See §4.
+- **The turbulence closure is still the largest error bar in the project**, now measured on
+  time averages rather than asserted: +76 % on tray mean speed and **2.7× on ventilation
+  efficiency**, against ~0.3 % for the mesh and ±2.3 % temporal. Nothing downstream — Phase 2
+  stratification, the Phase 3 `Ri` crossover — is worth resolving to better than that until the
+  operating point (`Q`) and the closure are settled. See §4e and CLAUDE.md §10.2.
 - **Phase 3 at ~250 h is probably not worth committing blind.** Run the two `g` endpoints first
   (`GVALS="0 9.81"`, ~100 h); if 0 g and 1 g do not separate beyond their error bars there is no
   `Ri` crossover and the intermediate points buy nothing. See §4b.
@@ -135,6 +155,61 @@ Both are recorded in CLAUDE.md §5.1 / §10.3; the short version:
 Neither affects any previously reported result — no transient had ever been run — but the
 second was being used as a reason to prefer `Q` = 1.25, and that reason is now withdrawn.
 The free-air argument for 1.25 (CLAUDE.md §6.2) is untouched and still stands on its own.
+
+## 3b. Two more bugs, found analysing the finished kOmegaSST arm (2026-08-16)
+
+Both were in the **analysis** rather than the solve, both were silent, and both made a run look
+better-behaved than it was. Fixed in `validation/plot_transient.py`, which
+`compare_transients.py` imports — so there is one implementation, not two.
+
+### 3b.1 A resumed run's postProcessing output was being read from the abandoned stub
+
+`p1_trans_q1p25_m0_kom_jet` was paused at t = 43.5 s and resumed. The first resume attempt
+aborted after ~140 samples. When the real resume started, `postProcessing/*/43.5/` **already
+existed**, and OpenFOAM does not overwrite — it writes the new segment alongside as
+`<stem>_43.5.dat`.
+
+`read_series` globbed only the bare `<stem>.dat`, so it read the **stub** and stopped at
+43.7745 s, discarding 43.5 → 48.1098 s:
+
+| file | rows | covers |
+|---|---|---|
+| `traySignal/43.5/surfaceFieldValue.dat` (stub) | 140 | 43.502 → **43.7745** |
+| `traySignal/43.5/surfaceFieldValue_43.5.dat` | 2,351 | 43.502 → **48.1098** |
+
+The last **0.63 τ of a 25-hour run** was missing from every statistic, and nothing said so —
+the report simply announced the case "ends at 43.775 s". `yPlus/43.5/yPlus.dat` is the clearest
+tell: it contains **0 data rows**, pure headers, and was what the y⁺ check was reading.
+
+`_restart_paths()` now globs `<stem>*.<ext>` and orders by *(directory time, mtime)* so that at
+a duplicated timestamp the most recently written file is consumed last — `read_series` already
+kept the last value at each time, so that rule alone resolves the overlap. `read_probes` gained
+the same de-duplication, which it had been missing entirely.
+
+**This is generic to every resumed case**, not specific to this one.
+
+### 3b.2 `V_air` was a module constant, and the geometry changed underneath it
+
+`plot_transient.py` and `plot_convergence.py` both hard-coded `V_AIR = 2.3296e-3` — correct for
+the **flush** tray adopted 2026-08-16. Every case in `runs/` predates that and carries the
+slotted geometry at 2.5300828e-3, so τ came out **8.6 % low** for all of them, inflating every
+window measured in τ and shrinking the apparent age of air.
+
+This is the *same bug as the hard-coded `tau = 1.82 s`* that CLAUDE.md §10.3 already records,
+recurring one level up: the fix then was to read `Q` from the case's own BC, and the constant
+that survived was the other factor in `V_air/Q`. Both files now read the volume from the case's
+own `log.checkMesh` (`v_air()` / `case_v_air()`), with the constant demoted to a fallback.
+
+The mesh is the authority for the same reason the BC is: it is what the solver integrated.
+
+> **This one carries its own proof.** For any converged steady flow, mass conservation on the
+> age field makes `<age>_outlet ≡ τ` exactly (CLAUDE.md §10.3). Measured on this arm:
+> `ageOutlet` = 7.28327 s against the 7.28660 s the fix returns — **−0.046 %**. Against the old
+> constant's 6.71 s it would have been **+8.5 %**. The identity independently confirms the new
+> τ and rules out the old one.
+>
+> Watch for the regex: `checkMesh` writes `Total volume = 0.0025300828.  Cell volumes OK.` and a
+> trailing `[0-9.]` character class swallows the full stop. The pattern must end on a digit.
 
 ## 4. How the numbers will be reported
 
@@ -553,6 +628,188 @@ the arms to answer it: `m0_lam` (plain, `x_res` = 202 mm, shear layer never reso
 is buying jet-spreading accuracy rather than unsteadiness fidelity, and the +2.2× wall clock it
 costs (2× steps as well as +9 % cells) can be spent elsewhere. If they disagree, the shear layer
 matters after all. `m0_lam` is queued behind the primary arm precisely so this can be checked.
+
+## 4e. ✅ RESULT — the kOmegaSST arm finished. Model spread is **+76.2 %** on a time average.
+
+Completed 2026-08-16 at t = 48.1098 s = **6.60 τ**, the designed length. Both arms analysed on
+a **matched window** 20.05 → 48.11 s (3.85 τ), because the laminar arm ran on to 62 s and
+`compare_transients.py` correctly refuses to compare unequal stretches of physical time.
+
+| | laminar | kOmegaSST | spread |
+|---|---|---|---|
+| tray mean speed [m/s] | 0.02947 ± 0.00018 | **0.05191 ± 0.00026** | **+76.2 %** |
+| RMS of the fluctuation | 2.3 % | **1.2 %** | −48 % |
+| integral timescale `T_int` | 0.958 s | **2.262 s** | **2.36×** |
+| chamber-scale period (on the window) | 10.49 s = 1.44 τ | **9.35 s = 1.28 τ** | **agree** |
+| `N_eff` over the window | 15.0 | **6.3** | |
+| tray CoV (uniformity) | 0.921 | **0.666** | −28 % |
+| mean age of air | 4.96 τ | **1.82 τ** | **−63 %** |
+| hood age | 4.83 τ | 1.70 τ | |
+| worst cell | 10.57 τ | 6.75 τ | |
+| **ventilation efficiency `ε_a`** | **10.1 %** | **27.4 %** | **2.7×** |
+
+Combined SE on the tray means is 3.11e-4, so the difference clears its error bar by a **ratio of
+72**. It is not a sampling artefact.
+
+### This supersedes both earlier spread figures
+
+| source | spread | why it is superseded |
+|---|---|---|
+| CLAUDE.md §5.2, steady | 89 % | SIMPLE-iteration averages of runs that never converged |
+| §4a, matched 2 s windows | +117 %, +107 % | windows ~0.2 of the flow's own timescale — §4a's own lesson |
+| **§4e, 3.85 τ time average** | **+76.2 %** | the quantity the matrix was built to measure |
+
+The earlier numbers were biased **high**, consistent with them being measured on short windows
+early in the record where the kOmegaSST arm had not finished relaxing (see the caveat below).
+**Quote +76 %.**
+
+### The over-diffusion signature is now visible on four metrics at once
+
+kOmegaSST reports a chamber that is simultaneously **faster** (+76 %), **smoother** (RMS halved),
+**more uniform** (CoV −28 %) and **better ventilated** (ε_a 2.7×). That is not four findings, it
+is one: CLAUDE.md §5.2 measured `ν_t` = 5× molecular at this `Re_port`, i.e. `Re_eff` = 242
+against 1458. Every entry in the table is what a 6× more viscous chamber looks like.
+
+**But the chamber-scale period is the same in both arms** — 9.35 s (kOmegaSST) against 10.49 s
+(laminar), 1.28 τ vs 1.44 τ, one frequency bin apart and therefore indistinguishable. So the
+closure does **not** slow or remove the recirculation; it damps the *fast* fluctuation riding on
+it, which is why `T_int` more than doubles while the dominant period does not move. The
+recirculation is a property of the chamber and the port arrangement, not of the model — which is
+the useful half of this comparison, and it corroborates the ≈ 10.8 s figure in §4 from a wholly
+independent run.
+
+**The laminar arm remains the physically defensible one at `Re_port` = 1458. This arm bounds the
+uncertainty; it is not a competing answer.** The ventilation row is where that matters most:
+10.1 % vs 27.4 % is the difference between "short-circuits badly, needs a port redesign" and
+"mediocre but workable", and the turbulence model must not be what decides it.
+
+Both age solves certify: `ageOutlet`/τ = **−0.046 %** (kOmegaSST) and **−0.045 %** (laminar).
+
+### ⚠ Caveat — this arm is less well converged in time than the laminar one
+
+Two checks say the same thing, and should be read together rather than as separate problems:
+
+| check | laminar | kOmegaSST |
+|---|---|---|
+| `N_eff` (want ≥ 10) | 15.0 ✓ | **6.3 ✗** |
+| mean still drifting past the 2.75 τ discard? | flat to ±0.5 % ✓ | **falls 0.05191 → 0.05156 out to 4 τ (−0.7 %) ✗** |
+| spectral peak (on the averaging window) | resolved, 10.49 s = 1.44 τ ✓ | resolved, 9.35 s = 1.28 τ ✓ |
+
+The first two follow from `T_int` being 2.36× larger: at equal record length the RANS arm gets
+fewer independent looks and has not finished forgetting its initial field. Its record is also
+the shorter of the two (48.11 s against 62 s), which costs it further. The consequence is that
+the absolute kOmegaSST figures carry ~1 % more systematic error than the laminar ones.
+
+> **Read the spectrum on the averaging window, not the full record.** Run over 0 → 48.11 s the
+> kOmegaSST peak lands exactly on the window fundamental and the report declares it
+> resolution-limited — but that is the start-from-rest transient acting as a trend, which is the
+> failure the script's own warning describes ("red noise and an unresolved oscillation look
+> identical"). Restricted to 20.05 → 48.11 s the peak resolves cleanly. The laminar arm is
+> insensitive to this because its longer record dilutes the same transient.
+
+It does **not** threaten the headline. Extrapolating the residual drift to a 4 τ discard gives
+0.05156 vs 0.02868 = **+79.8 %**, and the effect clears its error bar 72×. A record long enough
+to fix `N_eff` would need to be several times 48 s — i.e. another ~25 h+ — to move a number that
+is already unambiguous. **Not worth the machine time.**
+
+### What this arm changes elsewhere
+
+- **§4a's "~110 % model spread" row in the Summary is superseded** by +76.2 %. The retraction in
+  §4a stands as written; only the magnitude moves.
+- **Both arms agree the hood is *not* the worst-ventilated region** — hood/mean = 0.97
+  (laminar) and 0.94 (kOmegaSST). CLAUDE.md §6.1 predicts the hood as the dead zone "by a wide
+  margin". Two independent turbulence treatments now say otherwise, on converged `phiMean`
+  fields. **§6.1's prediction should be amended.**
+- **Phase 3 inherits a ~76 % model uncertainty**, which is far larger than any gravity effect
+  the sweep is likely to resolve. Settle the operating point and the closure *before*
+  committing ~250 h (§4b).
+
+## 4f. The kOmegaSST arm **relaxes to a steady state**. §4a's retracted claim was right — on different evidence.
+
+Found 2026-08-16 while checking why the kOmegaSST animation showed no motion. It is the answer
+to the question §4a left open, and it should be read together with that section's warning.
+
+### The measurement
+
+Slide a one-period (9.5 s) window along the record and take the fluctuation **amplitude** inside
+each. A sustained oscillation gives a flat line; a decaying transient gives a monotone fall.
+Both arms, identical treatment (`validation/plot_fluctuation_decay.py`,
+`validation/fluctuation_decay.png`):
+
+| arm | probe | first window | last window | ratio | verdict |
+|---|---|---|---|---|---|
+| laminar | hood | 9.96 % | 11.16 % | **1.12** | sustained |
+| laminar | off-axis −30 | 4.00 % | 4.19 % | **1.05** | sustained |
+| **kOmegaSST** | hood | 1.48 % | **0.05 %** | **0.03** | **decaying → steady** |
+| **kOmegaSST** | off-axis −30 | 12.62 % | **0.36 %** | **0.03** | **decaying → steady** |
+
+Six successive windows, ~4 cycles, 20.05 → 57.5 s. The kOmegaSST fluctuation falls **~30×,
+monotonically, on both probes**; the laminar arm is flat over the same span. By t ≈ 48 s the RANS
+chamber is steady to a few hundredths of a percent.
+
+Independently visible in the rendered frames: **52× less pixel motion** than the laminar
+animation (mean range 0.23/255 against 13.03/255). See `doc/animation_komega_retuned/`.
+
+### Why this is not the retracted claim re-derived
+
+§4a withdrew "`kOmegaSST` suppresses the instability" because it rested on probe **correlation
+`r`** over 2 s windows, and `r` on a window shorter than the flow's own timescale tracks the
+oscillation's *phase*, not its existence — the matched repeat reversed the sign. That retraction
+stands: the evidence was bad.
+
+This is a different measurement and does not share the failure mode:
+
+| | the retracted test | this test |
+|---|---|---|
+| quantity | correlation `r` between two probes | fluctuation **amplitude** |
+| window | 2 s ≈ 0.2 cycles | 9.5 s = 1 cycle, six of them |
+| span | one window | 4 cycles, monotone trend |
+| control | none | the laminar arm through the identical analysis |
+| failure mode | phase aliasing flips the sign | a 30× monotone decay cannot be phase |
+
+§4a itself named the bar: "needs a metric evaluated over many cycles, i.e. the full 28.1 s window
+at minimum". This uses 37.5 s and a controlled comparison arm.
+
+### What it explains
+
+Three things previously logged as separate problems are one thing:
+
+- **`N_eff` = 6.3 and `T_int` 2.36× the laminar value** (§4e). A decaying trend has a long
+  autocorrelation by construction. This was never statistical under-sampling.
+- **The mean "still drifting" −0.7 % past the discard window** (§4e). Not a failure to forget the
+  initial field — it is *physical relaxation toward the steady value*.
+- **Why the steady kOmegaSST run converged 2.4 orders** where four laminar steady runs stalled
+  (CLAUDE.md §5.1). If the RANS flow is genuinely steady, `simpleFoam` should converge it. It did.
+
+Consistent with CLAUDE.md §5.2: `ν_t` = 5× molecular ⇒ `Re_eff` = 242, not 1458. A confined jet
+at `Re` = 242 does not sustain a recirculation instability.
+
+### What it changes
+
+- **The +76.2 % spread is unaffected**, and the framing sharpens. Using this arm's *converged*
+  late value (0.05156 m/s over 48 → 57.5 s) against the laminar arm's oscillating mean gives
+  **+78.3 %** — the same answer. The comparison is not "two fluctuating flows with different
+  means"; it is **a steady flow against an oscillating one**, differing by ~77 %.
+- **The reported kOmegaSST "time average" is somewhat ill-posed.** It averages a decaying
+  transient plus a steady end state. The defensible single number for this arm is the late-window
+  value, ~0.0516 m/s. The frozen §4e figure (0.05191) is 0.7 % above it — immaterial at a 76 %
+  effect, but say which you mean.
+- **This does not rehabilitate `kOmegaSST` here.** Steadiness is not evidence of correctness: it
+  converges *because* it is solving a 6× more viscous chamber (§4e). The laminar arm remains the
+  physically defensible one at `Re_port` = 1458. What changes is the *mechanism* — the closure
+  does not merely blur the oscillation, it removes it.
+
+### Caveats
+
+- **Uses the extended record (to 57.5 s)**, which was banked for animation frames after the
+  reported average was frozen at 48.11 s. This is a fluctuation-amplitude diagnostic, separate
+  from the reported mean; it does not contaminate §4e.
+- **4 cycles is still not many.** The decay is monotone across six windows and the control arm is
+  flat, which is far stronger than any single-window statistic — but "steady" here means "no
+  sustained fluctuation over 4 cycles", not a proof that none exists on a longer timescale.
+- **Only the laminar arm has been run past 62 s.** If the laminar oscillation itself decayed at,
+  say, 15 τ, the contrast would narrow. Nothing suggests it does — it is flat over 4 cycles — but
+  it has not been tested further.
 
 ## 4d. Resume here — what to do when the runs finish
 

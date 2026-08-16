@@ -1,0 +1,187 @@
+
+############################################################
+# 1. CROSS-CASE COMPARISON
+############################################################
+
+============================================================================================================
+TRANSIENT COMPARISON -- tray-plane mean speed, time-averaged
+============================================================================================================
+case                              cells    tau   window       mean      +-SE    RMS%   T_int   N_eff    f_pk   anti
+                                           [s]    [tau]      [m/s]     [m/s]             [s]            [Hz]      r
+------------------------------------------------------------------------------------------------------------
+p1_trans_q1p25_m0_kom_jet        415334   7.29      3.9    0.05191   2.6e-04     1.2   2.262       6    0.11   0.70
+p1_trans_q1p25_m0_lam_jet        415334   7.29      5.8    0.02892   4.5e-04     3.6   4.104       5    0.02  -0.61
+------------------------------------------------------------------------------------------------------------
+SE is the standard error of the MEAN with correlated samples (N_eff = N*dt/2T_int), NOT sd/sqrt(N).
+anti = correlation of the two off-axis probes.
+   ⚠ NOT a state indicator unless the window spans MANY dominant
+     timescales. Measured 2026-08-15: with a >= 8.9 s timescale, r over
+     successive 2 s windows swung +0.99 / -0.99 / -0.13 in the SAME run.
+     A short window samples the oscillation's PHASE, not whether it
+     exists. Check the T_int and window columns before reading it.
+
+!! WARNING -- these cases are NOT at the same simulated time:
+     p1_trans_q1p25_m0_kom_jet      ends at   48.110 s  (6.60 tau)
+     p1_trans_q1p25_m0_lam_jet      ends at   62.000 s  (8.51 tau)
+   Their averaging windows therefore cover different stretches of
+   physical time, and the comparison below mixes a time difference
+   with a mesh/model difference. Wait for the shorter runs, or
+   restrict every case to a common window by hand before quoting
+   any of this as a model or mesh effect.
+
+============================================================================================================
+PAIRWISE -- is the difference in the mean larger than the uncertainty?
+============================================================================================================
+A                         B                               diff   diff %  combined SE   ratio  verdict
+------------------------------------------------------------------------------------------------------------
+p1_trans_q1p25_m0_kom_jet p1_trans_q1p25_m0_lam_jet   -0.02300   -44.3%     5.21e-04    44.1  STRONGLY different
+------------------------------------------------------------------------------------------------------------
+ratio < 2 -> the two runs agree to within their own sampling noise;
+a mesh/model difference is only real if it clears its error bar.
+
+wrote /home/henry/OpenFOAM/henry-v2606/run/microgreenChamber/validation/transient_matrix.png
+
+############################################################
+# 2. DISCARD-WINDOW SENSITIVITY
+#    The mean must stop moving well before the 2.75-tau
+#    discard. If it is still drifting there, the run has
+#    not forgotten its initial field and the average is
+#    contaminated however long the record is.
+############################################################
+
+==============================================================================
+DISCARD-WINDOW SENSITIVITY -- p1_trans_q1p25_m0_kom_jet
+==============================================================================
+   discard   discard   samples        mean       +-SE    RMS%
+     [tau]       [s]                 [m/s]      [m/s]        
+------------------------------------------------------------------------------
+      0.50      3.64     22678     0.05391   1.55e-03     5.2
+      1.00      7.29     20820     0.05358   1.41e-03     5.1
+      1.50     10.93     18962     0.05335   1.34e-03     5.1
+      2.00     14.57     17104     0.05282   9.89e-04     4.3
+      2.75     20.04     14317     0.05191   2.56e-04     1.2
+      3.50     25.50     11530     0.05174   1.78e-04     1.0
+      4.00     29.15      9672     0.05156   8.77e-05     0.4
+------------------------------------------------------------------------------
+The mean should stop moving well before the 2.75 tau the generator uses.
+If it is still drifting at 2.75, the run has not forgotten its initial field.
+
+==============================================================================
+DISCARD-WINDOW SENSITIVITY -- p1_trans_q1p25_m0_lam_jet
+==============================================================================
+   discard   discard   samples        mean       +-SE    RMS%
+     [tau]       [s]                 [m/s]      [m/s]        
+------------------------------------------------------------------------------
+      0.50      3.64     29839     0.02867   4.53e-04     5.2
+      1.00      7.29     27981     0.02887   3.61e-04     4.3
+      1.50     10.93     26123     0.02902   4.10e-04     3.7
+      2.00     14.57     24265     0.02900   4.34e-04     3.7
+      2.75     20.04     21478     0.02892   4.55e-04     3.6
+      3.50     25.50     18691     0.02880   4.63e-04     3.6
+      4.00     29.15     16833     0.02868   4.65e-04     3.6
+------------------------------------------------------------------------------
+The mean should stop moving well before the 2.75 tau the generator uses.
+If it is still drifting at 2.75, the run has not forgotten its initial field.
+
+############################################################
+# 2b. SPECTRUM -- where is the unsteadiness, and is the
+#     peak even resolved? A peak sitting AT 1/T is the
+#     window fundamental, not a measurement.
+############################################################
+
+=== spectrum: p1_trans_q1p25_m0_kom_jet
+  record 0.00-48.11 s = 48.11 s (6.60 tau), 24559 samples, Nyquist 255 Hz
+  lowest resolvable frequency 1/T = 0.021 Hz
+  spectral peak                   = 0.021 Hz  (period 48.11 s)
+  !! RESOLUTION-LIMITED -- the peak IS the window fundamental.
+     Conclude only: the dominant timescale is >= 48.1 s (6.60 tau).
+     Do not quote 48.11 s as a period. Lengthen the record.
+     Do not fit a spectral slope either: with < 1 cycle in the
+     record an FFT is fitting a trend, and any trend gives a steep
+     slope. Red noise and an unresolved oscillation look identical.
+  power by band:
+    chamber-scale (periods > 1 s)    100.0 %
+    intermediate                       0.0 %
+    St~0.3 jet-column band             0.0 %
+    high frequency                     0.0 %
+  timescale still unresolved, so using the record length as a lower bound:
+  the 6.6-tau averaging window is 28.1 s => at most ~1 independent cycles.
+
+=== spectrum: p1_trans_q1p25_m0_lam_jet
+  record 0.00-62.00 s = 62.00 s (8.51 tau), 31727 samples, Nyquist 255 Hz
+  lowest resolvable frequency 1/T = 0.016 Hz
+  spectral peak                   = 0.081 Hz  (period 12.40 s)
+  -> resolved: the peak is above the window fundamental.
+  power by band:
+    chamber-scale (periods > 1 s)    100.0 %
+    intermediate                       0.0 %
+    St~0.3 jet-column band             0.0 %
+    high frequency                     0.0 %
+  resolved period 12.40 s = 1.70 tau;
+  the 6.6-tau averaging window is 28.1 s => ~2.3 independent cycles.
+  ⚠ frequency resolution is 0.016 Hz, so with the peak at 0.081 Hz the period
+    is only pinned to within about a bin -- treat 12.4 s as order-of-magnitude.
+
+############################################################
+# 3. PER-CASE TRANSIENT STATISTICS
+############################################################
+
+--- p1_trans_q1p25_m0_lam_jet
+wrote /home/henry/OpenFOAM/henry-v2606/run/microgreenChamber/validation/p1_trans_q1p25_m0_lam_jet_transient.png
+
+averaging window: 20.05 s -> 62 s (5.8 residence times, tau = 7.29 s), 21472 samples
+median time step: 1.970e-03 s
+
+quantity                                   mean          RMS    RMS %          min          max
+tray-plane mean speed [m/s]            0.028917      0.00104      3.6     0.026456      0.03068
+tray slot flux [m3/s]                5.2932e-09     3.86e-09     72.9  -3.3561e-09   1.6649e-08
+
+--- p1_trans_q1p25_m0_kom_jet
+wrote /home/henry/OpenFOAM/henry-v2606/run/microgreenChamber/validation/p1_trans_q1p25_m0_kom_jet_transient.png
+
+averaging window: 20.05 s -> 48.1098 s (3.9 residence times, tau = 7.29 s), 14311 samples
+median time step: 1.961e-03 s
+
+quantity                                   mean          RMS    RMS %          min          max
+tray-plane mean speed [m/s]            0.051913     0.000642      1.2     0.051117     0.053871
+tray slot flux [m3/s]                3.1955e-08     1.69e-08     53.0   1.7434e-08   7.3891e-08
+
+############################################################
+# 4. MEAN AGE OF AIR, on the time-averaged flux
+#    Check ageOutlet == tau FIRST -- if it does not, the
+#    transport solve did not converge and ageMean/ageMax
+#    are meaningless (validation/age_of_air.md).
+############################################################
+
+--- p1_trans_q1p25_m0_lam_jet
+== mean age of air on phiMean at t = 62  (case p1_trans_q1p25_m0_lam_jet)
+   (serial -- expect several minutes. Progress: /home/henry/OpenFOAM/henry-v2606/run/microgreenChamber/runs/p1_trans_q1p25_m0_lam_jet/ageEval/log.age)
+   age, volume mean   3.61458932e+01 s
+   age, max           7.70412128e+01 s
+   age field written to /home/henry/OpenFOAM/henry-v2606/run/microgreenChamber/runs/p1_trans_q1p25_m0_lam_jet/ageEval/62.00000001/age  (open in ParaView to locate the dead zones)
+
+--- p1_trans_q1p25_m0_kom_jet
+== mean age of air on phiMean at t = 48  (case p1_trans_q1p25_m0_kom_jet)
+   (serial -- expect several minutes. Progress: /home/henry/OpenFOAM/henry-v2606/run/microgreenChamber/runs/p1_trans_q1p25_m0_kom_jet/ageEval/log.age)
+   age, volume mean   1.32794779e+01 s
+   age, max           4.91525558e+01 s
+   age field written to /home/henry/OpenFOAM/henry-v2606/run/microgreenChamber/runs/p1_trans_q1p25_m0_kom_jet/ageEval/48.00000001/age  (open in ParaView to locate the dead zones)
+
+############################################################
+# ACCEPTANCE -- CLAUDE.md 9. State these explicitly.
+############################################################
+  1. checkMesh passed                     grep '^Mesh OK' runs/<case>/log.checkMesh
+  2. total volume == V_air 2.3296e-3      grep 'Total volume' runs/<case>/log.checkMesh
+                                          (a sealed tray slot is invisible to
+                                           every other mesh metric -- CLAUDE.md 7)
+  3. mass balance closes                  postProcessing/inletFlux + outletFlux
+  4. monitored quantities flat            section 1 above, RMS column
+  5. averaging window adequate            section 1, N_eff column (>= 30 good,
+                                          10-30 marginal, < 10 extend the run)
+  6. discard window adequate              section 2 -- mean not still drifting
+  7. age solve converged                  section 4 -- ageOutlet == tau
+
+Carry the uncertainties, do not drop them:
+  turbulence model  ~89 % on tray mean speed  <- the largest error bar
+  age discretisation ~9 % (limitedLinear vs upwind)
+  mesh (m0 vs m1)   ~0.3 % on tray mean, but UNTESTED for the transient

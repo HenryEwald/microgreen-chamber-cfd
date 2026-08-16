@@ -134,12 +134,32 @@ def label_end(ax, x, y, text, color, dy=0):
     )
 
 
-# CLAUDE.md 6.1 -- free air volume, the residence-time denominator.
-V_AIR = 2.530e-3  # m3
+# CLAUDE.md 6.1 -- free air volume, the residence-time denominator. Fallback
+# ONLY; case_v_air() prefers the case's own meshed volume. Current geometry is
+# the flush tray, 2026-08-16 (the slotted tray it replaced was 2.530e-3).
+V_AIR_FALLBACK = 2.3296e-3  # m3
+
+
+def case_v_air(case):
+    """Free air volume, from the case's OWN checkMesh rather than a constant.
+
+    A module constant describes the geometry at import time; the mesh describes
+    the geometry the solver integrated. They diverged on 2026-08-16 when the
+    tray went flush (2.530e-3 -> 2.3296e-3), so every pre-existing case in runs/
+    had its tau understated by 8.6 %. Same reasoning as case_tau() applies to Q.
+    """
+    log = case / "log.checkMesh"
+    try:
+        # Must end on a digit: checkMesh writes "Total volume = 0.00253.  Cell
+        # volumes OK." and a trailing [0-9.] class swallows the full stop.
+        m = re.findall(r"Total volume = ([-+0-9.eE]*[0-9])", log.read_text())
+    except OSError:
+        return V_AIR_FALLBACK
+    return float(m[-1]) if m else V_AIR_FALLBACK
 
 
 def case_tau(case):
-    """Residence time V_air / Q, from the case's own inlet BC.
+    """Residence time V_air / Q, from the case's own inlet BC and mesh.
 
     Authoritative because it is what the solver actually applied, rather than
     what a note says was intended. Returns None if the BC cannot be parsed, so
@@ -153,7 +173,7 @@ def case_tau(case):
     if not m:
         return None
     q = float(m.group(1))
-    return V_AIR / q if q else None
+    return case_v_air(case) / q if q else None
 
 
 def main(case_dir):

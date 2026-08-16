@@ -55,10 +55,41 @@ PORT_X = 0.060           # port centre, x (centred on width)
 PORT_Z = 0.066667        # port centre, z above the internal floor
 #                          = 0.060 external + 0.010 - 0.0033333 floor
 
-TRAY_W, TRAY_H, TRAY_D = 0.115, 0.025, 0.125
-TRAY_X0 = (WIDTH - TRAY_W) / 2.0          # 0.0025
-TRAY_Y0 = (DEPTH - TRAY_D) / 2.0          # 0.0308335
-TRAY_X1, TRAY_Y1 = TRAY_X0 + TRAY_W, TRAY_Y0 + TRAY_D
+# Tray. FLUSH WITH ALL FOUR CHAMBER WALLS as of 2026-08-16 (design change): it
+# fills the whole internal floor footprint, so there are neither 2.5 mm side
+# slots nor 3.08 cm end gaps. It was 0.115 x 0.025 x 0.125 m, centred.
+#
+# CONSEQUENCE, read this before interpreting any result: the tray now covers the
+# floor completely, so the `floor` patch has NO fluid faces at all. The bottom of
+# the fluid domain IS the tray top. The chamber floor is effectively raised to
+# z = 25 mm and `floor` survives only as an empty patch.
+TRAY_H = 0.025           # tray top above the internal floor -- the metric surface
+
+# The tray is written 1 mm OVERSIZE in x, y and downward in z, so that its sides
+# and base are buried in the wall/floor material instead of sitting exactly on
+# them. Coincident surfaces are the one thing snappyHexMesh has no good answer
+# for: two coplanar triangulations at x = 0 leave the snapping direction
+# undefined, and the usual outcomes are a leak or a zero-thickness sliver, both
+# of which pass checkMesh. Burying the faces makes every intersection
+# transversal, which is the well-conditioned case.
+#
+# 1 mm < WALL (3.333 mm), so the oversize stays inside the shell material and
+# never pokes out of the chamber's external surface.
+#
+# The TOP face is NOT offset -- z = TRAY_H exactly. It is a real fluid boundary
+# and the surface every tray metric is evaluated on.
+TRAY_EMBED = 0.001
+
+TRAY_X0, TRAY_X1 = -TRAY_EMBED, WIDTH + TRAY_EMBED
+TRAY_Y0, TRAY_Y1 = -TRAY_EMBED, DEPTH + TRAY_EMBED
+TRAY_Z0, TRAY_Z1 = -TRAY_EMBED, TRAY_H
+
+# Volume the tray STL encloses (what verify_closed measures) vs the volume it
+# actually displaces from the fluid (what V_air needs). They differ by the
+# embedding, so they are kept separate -- conflating them is how a 1 mm margin
+# silently becomes a 1 mm geometry error.
+TRAY_STL_V = ((TRAY_X1 - TRAY_X0) * (TRAY_Y1 - TRAY_Y0) * (TRAY_Z1 - TRAY_Z0))
+TRAY_DISP_V = WIDTH * DEPTH * TRAY_H      # clipped to the internal footprint
 
 PORT_SEGMENTS = 64       # tessellation of the circular port openings
 BOUNDARY_DS = 0.001      # vertex spacing on the cross-section boundary (1 mm),
@@ -289,7 +320,7 @@ def write_chamber(path, profile, ds=BOUNDARY_DS):
 
 
 def write_tray(path):
-    x0, x1, y0, y1, z0, z1 = TRAY_X0, TRAY_X1, TRAY_Y0, TRAY_Y1, 0.0, TRAY_H
+    x0, x1, y0, y1, z0, z1 = TRAY_X0, TRAY_X1, TRAY_Y0, TRAY_Y1, TRAY_Z0, TRAY_Z1
     with open(path, "w") as f:
         f.write("solid tray\n")
         # normals point out of the tray solid, i.e. into the fluid
@@ -366,18 +397,24 @@ def report(profile):
         arc += math.hypot(dx, profile[i + 1][1] - profile[i][1])
     hood_v = area * DEPTH
     box_v = WIDTH * BOX_H * DEPTH
-    tray_v = TRAY_W * TRAY_H * TRAY_D
     shell_v = box_v + hood_v            # what chamber.stl encloses (no tray)
-    v_air = shell_v - tray_v
+    # DISPLACED, not the STL volume -- the tray is written 1 mm oversize, and
+    # that margin lies inside the wall material where there is no fluid to remove.
+    v_air = shell_v - TRAY_DISP_V
     print("  hood apex            %8.4f cm   (expect 14.3334)" % (max(p[1] for p in profile) * 100))
     print("  internal lip height  %8.4f cm   (expect  0.394)" % ((profile[0][1] - BOX_H) * 100))
     print("  hood x-section       %8.4f cm2  (expect 38.80)" % (area * 1e4))
     print("  hood arc length      %8.4f cm   (expect 15.28)" % (arc * 100))
-    print("  V_air                %8.4f L    (expect  2.530)" % (v_air * 1e3))
+    print("  tray footprint       %8.4f cm2  (expect 224.00, = full floor)"
+          % (WIDTH * DEPTH * 1e4))
+    print("  tray displaced       %8.4f L    (expect  0.560)" % (TRAY_DISP_V * 1e3))
+    print("  V_air                %8.4f L    (expect  2.330)" % (v_air * 1e3))
     # v_air is in m3. ACH = Q / V_air with Q in m3/h; tau = V_air / Q in seconds.
-    print("  ACH @ 5 m3/h         %8.0f h-1  tau %.2f s   (expect 1976, 1.82)" %
+    print("  ACH @ 5 m3/h         %8.0f h-1  tau %.2f s   (expect 2146, 1.68)" %
           (5.0 / v_air, 3600.0 * v_air / 5.0))
-    return shell_v, tray_v
+    print("  ACH @ 1.25 m3/h      %8.0f h-1  tau %.2f s   (expect  537, 6.71)" %
+          (1.25 / v_air, 3600.0 * v_air / 1.25))
+    return shell_v, TRAY_STL_V
 
 
 def main():

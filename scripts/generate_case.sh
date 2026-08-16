@@ -159,42 +159,32 @@ grep -q "^nx  $NX;" system/blockMeshDict \
   && grep -q "^nz  $NZ;" system/blockMeshDict \
   || { echo "failed to set resolution in system/blockMeshDict" >&2 ; exit 1 ; }
 
-# --- tray refinement: TOPOLOGY, not accuracy (m0 only) ----------------------
-# The 2.5 mm tray side slots are open flow paths (CLAUDE.md 6.1) and they close
-# completely if the local cell is not small enough to fit through them. Measured
-# 2026-08-14 at m0 with the template's level 2 (6.667/4 = 1.667 mm, 1.5 cells
-# across the slot): snappy sealed both slots and checkMesh reported a total
-# volume of 2.5147e-3 m3 against V_air 2.5302e-3 -- a 15.5 mL deficit, which is
-# 99 % of the 15.6 mL slot volume. It is a clean pass, silently solving a
-# DIFFERENT CHAMBER. It also kills the run at the first write, because the
-# traySlotFlux function object samples a plane that then has no faces.
+# --- tray refinement -------------------------------------------------------
+# REMOVED 2026-08-16. m0 used to get a level-3 override on the tray here.
 #
-# Level 3 at m0 gives 0.833 mm, 3 cells across, and restores the volume to
-# 2.53008e-3 (0.12 mL deficit). Cost is 205 k -> 380 k cells.
+# That override was TOPOLOGY, not accuracy: at level 2 the m0 cell is 1.667 mm,
+# only 1.5 cells across the 2.5 mm tray side slots, and snappy sealed both. The
+# result was a clean checkMesh pass that silently solved a DIFFERENT CHAMBER --
+# total volume 2.5147e-3 m3 against V_air 2.5302e-3, a 15.5 mL deficit that was
+# 99 % of the slot volume. Level 3 restored it, at 205 k -> 380 k cells.
 #
-# NOTE this makes the slot cell size 0.833 / 0.833 / 0.417 mm across m0/m1/m2 --
-# i.e. the m0 -> m1 step does NOT refine the slots, it only refines everything
-# else. That is deliberate: preserving the flow topology matters more than a
-# uniform refinement ratio on a feature carrying 0.23 % of Q (CLAUDE.md 10.3).
-# State it when reporting the independence study.
-if [ "$MESH" = m0 ]; then
-    sed -i -e 's|^            level       (2 2);|            level       (3 3);|' \
-           -e 's|^                tray    { level (2 2);|                tray    { level (3 3);|' \
-           -e 's|traySlotLeft  { mode inside; levels ((1e15 2)); }|traySlotLeft  { mode inside; levels ((1e15 3)); }|' \
-           -e 's|traySlotRight { mode inside; levels ((1e15 2)); }|traySlotRight { mode inside; levels ((1e15 3)); }|' \
-           system/snappyHexMeshDict
-    [ "$(grep -c '(3 3)' system/snappyHexMeshDict)" -eq 2 ] \
-      && [ "$(grep -c '1e15 3' system/snappyHexMeshDict)" -eq 2 ] \
-      || { echo "failed to raise tray refinement for m0" >&2 ; exit 1 ; }
-    echo "  m0: tray refinement raised to level 3 to keep the side slots open"
-fi
+# The flush tray has no slots, so there is nothing left to seal and no reason to
+# pay for level 3. m0 goes back to the template's level 2 and roughly halves.
+#
+# The habit that override taught is still the right one, and it is now the ONLY
+# guard on this class of error: ALWAYS check total volume against V_air, never
+# just "Mesh OK". templates/Allrun does this. A sealed feature is invisible to
+# every other mesh metric.
 
 # --- jet shear-layer refinement (opt-in) ------------------------------------
 # Adds the `jetShear` region at ONE LEVEL ABOVE inletJet. See snappyHexMeshDict
 # for the geometry and for why this is opt-in rather than default.
+#
+# NOTE the anchor: this used to insert above `traySlotLeft`, which no longer
+# exists. It now anchors on outletJet, the last surviving default region.
 if [ "$JETREFINE" = 1 ]; then
     JETLEVEL=3
-    sed -i "s|^        traySlotLeft |        jetShear      { mode inside; levels ((1e15 $JETLEVEL)); }\n        traySlotLeft |" \
+    sed -i "s|^        outletJet     { mode inside; levels ((1e15 2)); }|        outletJet     { mode inside; levels ((1e15 2)); }\n        jetShear      { mode inside; levels ((1e15 $JETLEVEL)); }|" \
         system/snappyHexMeshDict
     grep -q "jetShear      { mode inside" system/snappyHexMeshDict \
       || { echo "failed to enable jetShear refinement" >&2 ; exit 1 ; }
@@ -210,7 +200,9 @@ foamDictionary -entry "boundaryField/inlet/volumetricFlowRate" -set "$Q_M3S" 0.o
 
 # tau is needed by the transient block below, so derive it here rather than
 # down with the rest of the notes arithmetic.
-V_AIR=2.530e-3          # m3, NOT litres -- do not divide by 1000 again
+V_AIR=2.3296e-3         # m3, NOT litres -- do not divide by 1000 again.
+#                         Flush tray, 2026-08-16: was 2.530e-3 when the tray had
+#                         side slots and end gaps. CLAUDE.md 6.1.
 ACH=$(awk -v q="$Q_M3H" -v v="$V_AIR" 'BEGIN{printf "%.0f", q/v}')
 TAU=$(awk -v q="$Q_M3S" -v v="$V_AIR" 'BEGIN{printf "%.2f", v/q}')
 

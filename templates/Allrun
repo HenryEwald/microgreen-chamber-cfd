@@ -147,7 +147,7 @@ fi
 echo "== mesh accepted:"
 grep -E "cells:|non-orthogonality Max|Max skewness|Total volume" log.checkMesh.extra \
     | sed 's/^/   /'
-echo "   (V_air should be 2.5302e-3 m3 -- CLAUDE.md 6.1)"
+echo "   (V_air should be 2.3296e-3 m3 -- CLAUDE.md 6.1, flush tray)"
 
 # ---------------------------------------------------------------------------
 # Solve

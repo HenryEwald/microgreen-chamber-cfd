@@ -84,53 +84,27 @@ geometry
         max         (0.074  0.026 0.081);
     }
 
-    // The 2.5 mm tray side slots. These are OPEN flow paths (CLAUDE.md 6.1) and
-    // are the tightest feature in the mesh -- 1.5 cells across at m2 base size,
-    // which is not resolvable. These regions force them to level 2.
+    // REMOVED 2026-08-16 -- traySlotLeft / traySlotRight.
     //
-    // TWO thin boxes hugging the slots, not one box over the whole tray
-    // footprint (CLAUDE.md 7). The single-box version spanned 12 x 13.1 x 2.8 cm
-    // to resolve two 2.5 mm slits at the extreme edges in x: almost all of that
-    // volume was either inside the tray solid, where there are no cells at all,
-    // or open chamber that does not need level 2.
+    // The tray is now FLUSH with all four chamber walls and fills the entire
+    // internal floor footprint (design change, CLAUDE.md 6.1). There are no
+    // 2.5 mm side slots and no end gaps left to resolve, so the two thin
+    // refinement boxes that existed solely to keep them open are gone, along
+    // with the level-3 override generate_case.sh used to apply at m0.
     //
-    // The slots themselves sit at x in [0, 2.5] mm and [117.5, 120] mm (chamber
-    // wall to tray edge). Each box extends ~1.5 mm past the tray edge so the
-    // flow issuing from the slot is resolved too, and so the level transition
-    // has somewhere to sit -- nCellsBetweenLevels is 3.
+    // Kept for the record, because it is the most useful measurement this
+    // project made about where cells actually live: the A/B at m1 that replaced
+    // one large box with these two thin ones saved 5,273 cells -- 0.49 %, not
+    // the "substantial" cut CLAUDE.md 7 predicted. The single box looked
+    // expensive because it was geometrically large, but most of its volume sat
+    // INSIDE the tray solid where snappy deletes the cells at subsetting
+    // anyway. Refining cells that are about to be discarded is nearly free.
     //
-    // Slot resolution is IDENTICAL to the single-box version: both are level 2.
-    //
-    // ⚠ MEASURED 2026-08-14 -- this saves 0.5 %, not "substantially".
-    // Controlled comparison at m1, the two snappyHexMeshDicts differing ONLY in
-    // this block (diff runs/p1_baseline_m1 vs runs/p1_transient_m1):
-    //     one box   960,306 cells after shell refinement -> 1,069,964 final
-    //     two boxes 956,859 cells after shell refinement -> 1,064,691 final
-    //     saving      3,447 (0.36 %)                          5,273 (0.49 %)
-    // CLAUDE.md 7 predicted this would "cut the count substantially" and it does
-    // not. The single box looked expensive because it is geometrically large,
-    // but most of its volume is INSIDE the tray solid, where snappy deletes the
-    // cells at the subsetting step regardless -- refining cells that are about
-    // to be discarded costs almost nothing.
-    //
-    // Keep the two boxes: they are the honest description of the intent and they
-    // are not worse. But do NOT expect refinementRegions edits to buy headroom.
-    // The cells are in refinementSurfaces (+531 k at m1) and addLayers (+302 k);
-    // see the breakdown in blockMeshDict. Those are the only two real levers,
-    // and both trade against wall-resolved physics, so they are a scientific
-    // call rather than free optimisation.
-    traySlotLeft
-    {
-        type        searchableBox;
-        min         (-0.001 0.028 -0.001);
-        max         ( 0.004 0.159  0.027);
-    }
-    traySlotRight
-    {
-        type        searchableBox;
-        min         ( 0.116 0.028 -0.001);
-        max         ( 0.121 0.159  0.027);
-    }
+    // The lesson survives the geometry change: refinementRegions is NOT where
+    // the cells are. At m1 they are in refinementSurfaces (+531 k) and
+    // addLayers (+302 k). Those are the only two real levers, and both trade
+    // against wall-resolved physics, so they are a scientific call rather than
+    // free optimisation.
 }
 
 castellatedMeshControls
@@ -141,10 +115,28 @@ castellatedMeshControls
     maxLoadUnbalance    0.10;
     nCellsBetweenLevels 3;
 
+    // ⚠ tray.eMesh is DELIBERATELY ABSENT (2026-08-16). Do not add it back.
+    //
+    // The flush tray is written 1 mm oversize so its sides and base are buried
+    // in the wall/floor material rather than coplanar with them
+    // (make_geometry.py). That means EVERY edge of tray.stl lies inside solid,
+    // outside the fluid domain -- there is no tray feature edge left to snap to.
+    //
+    // Listing it here does active harm. Measured at m0 with the entry present:
+    // explicit feature snapping pulled mesh points out onto the buried edges,
+    // leaving a thin skirt of cells 1 mm PAST the chamber walls. Both the tray
+    // and walls patches came back with bounding boxes spanning
+    // x = -0.001 .. 0.121 against an internal width of 0 .. 0.120, and total
+    // volume was 2.3300881e-3 m3 against V_air 2.3296e-3 -- a 0.49 mL EXCESS,
+    // which is exactly perimeter(0.6133 m) x 1 mm x ~0.8 mm of skirt.
+    //
+    // The real feature -- the concave corner where the tray top meets each wall
+    // -- is the intersection of two refinementSurfaces, which snappy resolves
+    // from the surfaces themselves. It does not need, and must not get, an
+    // eMesh entry.
     features
     (
         { file "chamber.eMesh"; level 2; }
-        { file "tray.eMesh";    level 2; }
     );
 
     refinementSurfaces
@@ -180,8 +172,7 @@ castellatedMeshControls
     {
         inletJet      { mode inside; levels ((1e15 2)); }
         outletJet     { mode inside; levels ((1e15 2)); }
-        traySlotLeft  { mode inside; levels ((1e15 2)); }
-        traySlotRight { mode inside; levels ((1e15 2)); }
+        // traySlotLeft/Right removed 2026-08-16 -- the slots no longer exist.
 
         // jetShear is added here by `generate_case.sh --jetRefine`, at one level
         // above inletJet. It is OPT-IN, not default, for two reasons:
@@ -232,11 +223,24 @@ addLayersControls
         walls   { nSurfaceLayers 4; }
         hood    { nSurfaceLayers 4; }
 
-        // Tray: NO layers. The side slots are only ~6 cells wide at m2 and layer
-        // insertion inside a gap that tight fails or wrecks the cell quality
-        // (CLAUDE.md 7). Accept the unlayered tray and say so when reporting
-        // anything derived from tray wall shear.
-        tray    { nSurfaceLayers 0; }
+        // Tray: 4 layers, MATCHING THE WALLS, as of 2026-08-16.
+        //
+        // It carried nSurfaceLayers 0 for one reason only: layer insertion
+        // inside the ~6-cell-wide side slots either failed outright or wrecked
+        // the cell quality there. The flush tray has no slots -- its top is a
+        // single flat horizontal plane spanning the whole floor footprint,
+        // which is the easiest surface in the case to layer.
+        //
+        // This is what makes tray wall shear reportable for the first time.
+        // CLAUDE.md's standing caveat ("Tray has no boundary layers -- do not
+        // report tray wall shear") is lifted for flush-tray cases and ONLY
+        // those; every run generated before this date is still unlayered there.
+        //
+        // Watch the tray/wall junction in checkMesh: the layer stacks on the
+        // tray top and on the four walls now meet at a concave corner, which is
+        // where layer collapse shows up first. `floor` gets no layers in
+        // practice -- it has no fluid faces at all now (see make_geometry.py).
+        tray    { nSurfaceLayers 4; }
     }
 
     expansionRatio      1.2;
