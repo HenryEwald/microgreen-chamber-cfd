@@ -73,7 +73,21 @@ runPinned()
 # ---------------------------------------------------------------------------
 if [ ! -f constant/triSurface/chamber.stl ]; then
     echo "== generating geometry"
-    python3 ../../scripts/make_geometry.py --case . --verify > log.makeGeometry 2>&1 \
+    # generate_case.sh wrote the port size and diffuser tilt here. Regenerating
+    # WITHOUT them would silently rebuild the template default geometry -- a
+    # different chamber from the one this case was set up for, and nothing else
+    # would say so. Missing file is fatal rather than defaulted, for that reason.
+    [ -f system/geometryArgs ] || {
+        echo "system/geometryArgs is missing -- cannot regenerate the geometry"
+        echo "without knowing the port size and diffuser tilt. Regenerate the"
+        echo "case with scripts/generate_case.sh rather than patching this."
+        exit 1
+    }
+    read -r _geomargs < system/geometryArgs
+    echo "   geometry args: $_geomargs"
+    # shellcheck disable=SC2086
+    python3 ../../scripts/make_geometry.py --case . $_geomargs --verify \
+        > log.makeGeometry 2>&1 \
         || { echo "geometry generation FAILED, see log.makeGeometry"; exit 1; }
     cat log.makeGeometry
 fi

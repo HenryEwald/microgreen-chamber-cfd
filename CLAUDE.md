@@ -185,8 +185,31 @@ lose the L3 they warmed.
   V-cache die.
 - **`writeFormat binary;`** and `writeCompression off;` in `controlDict`. ASCII output is
   slow and huge. (The tutorials ship `ascii` — do not copy that.)
-- **`purgeWrite 5;`** for transient runs unless you specifically need the full history. Disk
-  is the binding constraint at 116 GB free.
+- **`purgeWrite 0;` — KEEP EVERY FRAME. Changed from 5 on 2026-08-16.** Disk is still the
+  binding constraint, but the decision moved from the template to **generation time**, where it
+  can be made with the numbers in front of you instead of discovered afterwards.
+
+  > **Why it changed.** `purgeWrite 5` is not a storage policy, it is an irreversible one: it
+  > deletes the history *as the run proceeds*, and the only way back is to resume from the final
+  > state and re-run. It cost the diffuser screen's control arm its frames — a 2.77 h run that
+  > left 5 usable time directories at 0.5 s spacing.
+  >
+  > **`writeInterval` moved with it, and was the real bug.** It was a hard-coded `0.5` chosen
+  > when `τ` was 7.29 s — 0.069 τ per frame, 96 frames over a 6.6-τ run, perfectly animatable.
+  > At the Ø 40 operating point `τ` is 0.71 s and `endTime` 4.69 s, so the same `0.5` gives
+  > **nine frames**. This is the **third** constant found sized for a superseded operating
+  > point, after `maxDeltaT` (2026-08-15) and the port area (2026-08-16); the pattern is always
+  > the same — a quantity that must scale with `τ` or `U_in`, frozen at one flow rate.
+  >
+  > `generate_case.sh --frames N` (default 60) now sets `writeInterval = endTime/N`, asserts
+  > `purgeWrite 0`, and **projects the disk cost before the case is written** — 271 bytes per
+  > cell per write, measured on `p1d_ctrl_m0` (382,613 cells, kOmegaSST, binary, including the
+  > `*Mean` and `_0` fields), +40 % for Phase 2. It warns when the projection exceeds half the
+  > free disk. That makes §3.3's "decide per study, and decide BEFORE the run" enforced rather
+  > than advised.
+  >
+  > Rough cost at m0: **~5.8 GB per 60-frame case.** A 4-case sweep is ~25 GB, which is why
+  > `--frames` is a knob and not a constant.
 
   > **⚠ It also silently makes ANIMATION impossible, and at `m0` the disk argument no longer
   > holds.** `purgeWrite 5` deletes the history *as the run proceeds* — there is no recovering
@@ -760,9 +783,9 @@ object will show this immediately.
 
 | Parameter | Symbol | Value | Notes |
 |---|---|---|---|
-| Fan | — | **LD3007MS** — 30 × 30 × 7 mm DC axial | mounted over a Ø 20 mm port |
-| Fan rating | `Q_free` | **5 m³/h — FREE AIR (zero back-pressure)** | **an upper bound, not the operating point** — see the note below |
-| Operating flow | `Q_op` | **`TBD` — sweep 5 / 2.5 / 1.25 m³/h. WORKING VALUE = 1.25** (default in `generate_case.sh` since 2026-08-14) | the single largest uncertainty in the project now. 1.25 is the bottom rung and the most likely to bracket the real point — see the free-air note below. Still a placeholder, not a measurement |
+| Fan | — | **Sunon MF50100V2-1000U-A99** — 50 × 50 × 10 mm DC axial, 5 VDC, 0.085 A, **430 mW**, 4800 rpm, Vapo-bearing, 25.6 dB(A) — **changed 2026-08-16** | was LD3007MS (30 × 30 × 7 mm). Mounted over a **Ø 40 mm** port |
+| Fan rating | `Q_free` | **18.69 m³/h (11.0 CFM) free air; 27.4 Pa (0.110 in-H₂O) shut-off** | a **flow** upgrade, not a **pressure** one — 27.4 Pa is the same class as the part it replaces, because that is what axial fans are |
+| Operating flow | `Q_op` | **DERIVED, not chosen — 11.77 m³/h at Ø 40 mm.** `generate_case.sh` solves the fan curve against the system curve; `--Q` overrides and warns | was `TBD`/1.25 m³/h. Still a placeholder in the sense that `K_sys` = 2.5 and the fan mid-curve are estimates — **measure it** (§10.2 item 1) |
 | Inlet bulk velocity | `U_in` | `Q / A_port`, `A_port` = 3.1416e-4 m² ⇒ **4.42 / 2.21 / 1.10 m/s** | let `flowRateInletVelocity` compute it; do not hard-code |
 | Chamber bulk velocity | `U_bulk` | `Q` / mid-plane free area (**124.8 cm²** = 116.0 box + 38.8 hood − **30.0** tray) ⇒ **0.111 / 0.056 / 0.028 m/s** | 40× slower than the jet — see the `Ri` note. Tray term was 28.75 cm² pre-2026-08-16 |
 | Air changes per hour | ACH | `Q` ÷ **2.3296 L** ⇒ **2146 / 1073 / 537 h⁻¹** | enormous, but normal for a 2.33 L box. Was 1976 / 988 / 494 |
@@ -773,7 +796,54 @@ object will show this immediately.
 | Inlet turb. length scale | `l` | `TBD` [0.07 · D_in = **1.4 mm**] | |
 | Operating pressure | `p_op` | `TBD` [101325 Pa] | `pRef` in `fvSolution` |
 
-> ### ⚠ 5 m³/h is free air — the chamber will not see it
+> ### ⚠ DESIGN CHANGE 2026-08-16 — new fan, Ø 40 mm ports, and an inlet vane diffuser
+>
+> Full record in `doc/diffuser/design.md`; the geometry is built and meshed, **nothing is
+> solved yet**. Headlines:
+>
+> | | was | now |
+> |---|---|---|
+> | fan | LD3007MS, 5 m³/h free air | **Sunon MF50100V2**, 18.69 m³/h free air, 27.4 Pa |
+> | port | Ø 20 mm | **Ø 40 mm**, both ends |
+> | `Q` | 1.25 m³/h (placeholder) | **11.77 m³/h (solved from the fan curve)** |
+> | `U_in` | 1.105 m/s | 2.60 m/s |
+> | `Re_port` | 1 458 — **laminar** | **6 863 — turbulent** |
+> | `U_bulk` | 0.028 m/s | **0.262 m/s** |
+> | `τ` | 6.71 s | **0.71 s** |
+> | m0 cells | 261 k | **383 k** (control), 500 k (diffused) |
+>
+> **Three consequences that are not arithmetic:**
+>
+> 1. **`Re_port` is now turbulent, so `kOmegaSST` is defensible on its own terms.** That
+>    removes the project's largest error bar — §5.2's measured **76 % laminar-vs-RANS spread**
+>    on tray mean speed existed because `Re_port` = 1458 was below any closure's validity. Note
+>    `Re = 4Q/(πDν)` is near-constant across port size here, because `Q` rises roughly linearly
+>    with `D` off this fan.
+> 2. **The transient is ~4× CHEAPER — ~5 h/case, not ~20 h.** §5.1's "cost is flat in `Q`"
+>    identity assumes a **fixed port**. Steps ∝ endTime/Δt ∝ (1/`Q`)/(1/`U`) = `U`/`Q` ∝ 1/`A`,
+>    and quadrupling `A_port` raises `Q` 9.4× but `U_in` only 2.35×. This is what makes a
+>    4-case diffuser screen affordable at all.
+> 3. **The chamber CANNOT be over-ventilated.** `U_bulk` = 0.8 m/s would need 35.9 m³/h, far
+>    beyond this fan at any port size. So the only way to exceed the 0.8 m/s ceiling anywhere
+>    is a surviving jet core, and the only way to reach 0.3 m/s everywhere is piston-like flow.
+>    **That is the entire diffuser brief: jet → plug.**
+>
+> **The port size is not settled.** Ø 45 gives `U_bulk` = 0.294 m/s, landing on the 0.30 m/s
+> target exactly, against 0.262 at Ø 40. Ø 40 was chosen because it maximises the *jet-decay*
+> figure of merit `Q/D` — the criterion the diffuser exists to make irrelevant — and because it
+> leaves 10 mm to the hood spring line where Ø 50 leaves 5 mm and Ø 55 breaks out of the box
+> section. **If the diffuser works, revisit this**; `--portD 45` is a one-word change.
+>
+> **Everything in `runs/` and `validation/` before this date is a Ø 20 mm chamber.**
+> `validation/audit_cases.sh` now byte-compares `chamber.stl` as well as `tray.stl` — the port
+> change leaves `tray.stl` **identical**, so the tray-only check would have passed 11 cases
+> that describe a different chamber.
+
+> ### ⚠ 5 m³/h is free air — the chamber will not see it (LD3007MS, superseded 2026-08-16)
+>
+> Kept because the *reasoning* is what justified the Ø 40 port: the fix for a fan that cannot
+> push against back-pressure is to remove the back-pressure, and Δp ∝ D⁻⁴ makes the port the
+> lever. The Sunon has the same 27.4 Pa shut-off, so this argument still binds.
 >
 > A 30 mm axial fan is a **high-flow, very low static-pressure** device; typical max static
 > pressure for this class is ~20–50 Pa, and axial fans lose flow steeply against any
@@ -1506,6 +1576,14 @@ used, and no figure derived from them goes out without the caveat on it.
 | Do old cases in `runs/` drift after a template fix? | **Yes, silently.** `p1_transient_m1` predates the `maxDeltaT` fix and still carries `1e-3` where 4.901e-4 is correct — it would step **2× too coarse in the jet** while reporting a comfortable max Courant, because `maxCo 6` is never reached. `validation/audit_cases.sh` checks every case against what the current generator would produce, and exits 1 if any is stale. **Extended 2026-08-16 to byte-compare each case's `tray.stl` against a freshly generated one** — after the flush-tray change 11 of 13 cases describe a different chamber, and nothing else says so. Regenerate rather than hand-edit (§1.3) | 2026-08-15 |
 | Are the sweep drivers usable as written? | **No — both rewritten.** `sweep_gravity.sh` and `sweep_Q.sh` were **steady, on `m2`, kOmegaSST by default**; every case would have failed to converge at ~5 h each. Now `m0 --jetRefine --transient`, model from `Re_port`, with cost warnings and `GVALS`/`QVALS`/`MESH` env overrides. See §10.4 | 2026-08-15 |
 | LED ceiling at the **working** `Q` | **~1.3 W, not ~8 W.** §6.3's table is at `Q` = 5; `ΔT` ∝ 1/`Q` and the working `Q` is 1.25, so the default pair (38.4 W, 1.25 m³/h) gives **ΔT = 91.7 K ⇒ 112 °C** — ~30× over budget, not the 43 °C the table implies. `generate_case.sh` now warns at generation time. **The binding design problem is thermal, not fluid-dynamic** | 2026-08-15 |
+| ⚠ Do transient runs keep enough frames to animate? | **They do now — `purgeWrite 0`, `writeInterval = endTime/--frames`, from 2026-08-16.** Previously `purgeWrite 5` deleted the history as the run proceeded (irreversible), and `writeInterval` was hard-coded at 0.5 s — 96 frames at `τ` = 7.29 s but **nine** at `τ` = 0.71 s. Third constant found frozen at a superseded operating point, after `maxDeltaT` and the port area. `generate_case.sh` now projects the disk cost (271 bytes/cell/write, measured) and warns past half the free disk | 2026-08-16 |
+| Is a swirl diffuser better than directed vanes? | **Better at MIXING, which is not the objective.** Mixing caps ε_a at 50 %, piston reaches 100 %, the chamber is at 10 % — and `U_bulk` = 0.262 m/s means plug flow puts nearly the whole tray in the 0.3-0.8 m/s band. But it exposed a real gap: the cascade turns the jet without FILLING the cross-section (Ø 40 is 10 % of free area). **Radial spread is kept, swirl is bracketed.** `S > 0.6` gives vortex breakdown = a standing central recirculation = re-breathing, and the chamber is 4.7 port diameters against the 10-20 swirl needs to decay. Screen is now control / cascade-30 / radial-15 (`S` 0.19) / radial-40 (`S` 0.60). See `doc/diffuser/design.md` §3a | 2026-08-16 |
+| **Fan / port / diffuser** | **CHANGED 2026-08-16: Sunon MF50100V2, Ø 40 mm ports, 5-vane inlet diffuser.** `Q` 1.25 → **11.77 m³/h (solved, not chosen)**, `Re_port` 1458 → **6863 (turbulent)**, `τ` 6.71 → 0.71 s. See the box in §6.2 and `doc/diffuser/design.md` | 2026-08-16 |
+| Is the transient still "flat in `Q`"? | **No — that identity assumed a FIXED PORT.** Steps ∝ `U`/`Q` ∝ 1/`A`, so quadrupling the port area makes it **~4× cheaper: ~5 h/case, not ~20 h**. This is what makes a 4-case diffuser screen affordable | 2026-08-16 |
+| Is the model spread still the largest error bar? | **Not at this operating point.** `Re_port` = 6863 is turbulent, so `kOmegaSST` is defensible on its own terms; the 76 % spread existed because `Re_port` = 1458 was below any closure's validity | 2026-08-16 |
+| Can the chamber be over-ventilated? | **No.** `U_bulk` = 0.8 m/s needs 35.9 m³/h, unreachable with this fan at any port size. The only route to exceeding the ceiling is a surviving jet core; the only route to 0.3 m/s everywhere is piston flow. **The diffuser brief is jet → plug** | 2026-08-16 |
+| ⚠ Why is `diffuser.eMesh` missing from snappy `features`? | **Same reason as `tray.eMesh`, and it is deliberate.** The shroud rim, vane leading edge and vane ends are all embedded in solid so their junctions are transversal, which means every vane root edge lies inside material. Feature snapping onto buried edges grows a skirt that `Mesh OK` cannot see. Level-4 `refinementSurfaces` resolves the 1.5 mm vanes without it | 2026-08-16 |
+| Does `foamDictionary -set` preserve a dict's comments? | **NO — it rewrites the whole file from the parsed dictionary and DISCARDS EVERY COMMENT.** Measured: `snappyHexMeshDict` went 300 → 255 lines and lost all its documentation, including an anchor a later `sed` depended on. Use a targeted in-place edit for any dict whose comments are load-bearing | 2026-08-16 |
 | **Tray geometry** | **CHANGED 2026-08-16 by design decision: flush with all four walls, filling the entire internal floor.** No side slots, no end gaps. `V_air` 2.530 → **2.3296 L**, τ at `Q` = 1.25 7.29 → **6.71 s**, tray metric area 0.014375 → **0.0224 m²**, m0 380 k → **261 k cells**. See the box in §6.1 | 2026-08-16 |
 | Does the `floor` patch survive a flush tray? | **No — snappy drops it entirely.** Zero fluid faces, so it is absent from `constant/polyMesh/boundary`; the fluid domain now begins at the tray top, z = 25 mm. Harmless: the `0.orig` BCs are regexes (`"(floor\|walls\|hood\|tray)"`) and a non-matching alternative needs no edit. Verified by a solver smoke test — `yPlus` reports walls/hood/tray and does not error | 2026-08-16 |
 | Can the tray carry surface layers now? | **Yes, and it does — 4, matching the walls.** `nSurfaceLayers 0` existed only because layers would not fit in a 6-cell slot. Measured at m0: **3.97 layers, 85.3 % coverage**, better than the walls' 70.1 %. **Tray wall shear is reportable on flush-tray cases** — and only those | 2026-08-16 |

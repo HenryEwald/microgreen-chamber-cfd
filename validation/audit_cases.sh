@@ -48,12 +48,25 @@ GEOMSTALE=0
 # is a real geometry change, not float noise.
 REF=$(mktemp -d)
 trap 'rm -rf "$REF"' EXIT
-if ! python3 scripts/make_geometry.py --case "$REF" > "$REF/log" 2>&1; then
-    echo "WARNING: could not generate reference geometry, skipping that check" >&2
-    REFTRAY=""
-else
-    REFTRAY="$REF/constant/triSurface/tray.stl"
-fi
+
+# EXTENDED 2026-08-16 to compare chamber.stl as well as tray.stl, and to
+# regenerate against the CASE'S OWN geometry arguments.
+#
+# tray.stl alone was sufficient only while the chamber shape was a constant. It
+# is not any more: --portD changes the end walls and the port opening, and it
+# leaves tray.stl BYTE-IDENTICAL. A Oe 20 case audited against a Oe 40 generator
+# would therefore have reported geometry OK while describing a different
+# chamber -- the exact failure mode this check exists to catch, reintroduced by
+# making the geometry parametric.
+#
+# A case with no system/geometryArgs predates the parametric port entirely, so
+# it is stale by definition rather than by comparison.
+ref_geom() {  # ref_geom <args...> -> populates $REF, echoes the triSurface dir
+    rm -rf "$REF/constant"
+    # shellcheck disable=SC2086
+    python3 scripts/make_geometry.py --case "$REF" $1 > "$REF/log" 2>&1 || return 1
+    echo "$REF/constant/triSurface"
+}
 
 printf "%-30s %-19s %-11s %-11s %-9s %s\n" \
     "case" "application" "maxDeltaT" "expected" "geometry" "verdict"
@@ -69,13 +82,27 @@ for d in runs/*/; do
 
     # Geometry: independent of steady/transient, so evaluate it for every case.
     casetray="$d/constant/triSurface/tray.stl"
-    if [ -z "$REFTRAY" ] || [ ! -f "$casetray" ]; then
-        geom="-"                     # never run, or no reference to compare to
-    elif cmp -s "$REFTRAY" "$casetray"; then
-        geom="OK"
-    else
+    casecham="$d/constant/triSurface/chamber.stl"
+    if [ ! -f "$casetray" ] || [ ! -f "$casecham" ]; then
+        geom="-"                     # never run: Allrun fills triSurface/
+    elif [ ! -f "$d/system/geometryArgs" ]; then
+        # No recorded arguments => generated before the port became a parameter,
+        # i.e. a Oe 20 chamber. Nothing to compare against; it is simply old.
         geom="STALE"
         GEOMSTALE=$((GEOMSTALE + 1))
+    else
+        read -r gargs < "$d/system/geometryArgs"
+        if refdir=$(ref_geom "$gargs"); then
+            if cmp -s "$refdir/tray.stl" "$casetray" \
+            && cmp -s "$refdir/chamber.stl" "$casecham"; then
+                geom="OK"
+            else
+                geom="STALE"
+                GEOMSTALE=$((GEOMSTALE + 1))
+            fi
+        else
+            geom="?"                 # generator refused these arguments
+        fi
     fi
 
     mdt=$(grep -oP '^maxDeltaT\s+\K[0-9.eE+-]+' "$cdict" 2>/dev/null)
@@ -105,8 +132,16 @@ for d in runs/*/; do
         div=4
     fi
 
-    want=$(awk -v n="$nx" -v dv="$div" -v q="$q" \
-        'BEGIN{u=q/3.14159265e-4; h=126.6667/n/dv/1000; printf "%.4g", 2.6*h/u}')
+    # Port area, from the case's OWN geometry rather than a constant. This was
+    # a hard-coded 3.14159265e-4 (Oe 20) until 2026-08-16, which flagged every
+    # correctly-generated Oe 40 case as STALE by a factor of 4 -- the audit
+    # carrying exactly the duplicated constant it exists to police.
+    aport=$(awk '$1=="PORT_AREA"{print $2}' \
+        "$d/constant/triSurface/geometry.info" 2>/dev/null)
+    [ -n "$aport" ] || aport=3.14159265e-4     # pre-parametric cases were Oe 20
+
+    want=$(awk -v n="$nx" -v dv="$div" -v q="$q" -v a="$aport" \
+        'BEGIN{u=q/a; h=126.6667/n/dv/1000; printf "%.4g", 2.6*h/u}')
     ok=$(awk -v a="$mdt" -v b="$want" 'BEGIN{r=a/b; print (r>0.98 && r<1.02)?"OK":"STALE"}')
     [ "$ok" = STALE ] && STALE=$((STALE + 1))
 

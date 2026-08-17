@@ -1,0 +1,7 @@
+diffuser screen started 2026-08-16T15:48:16-04:00
+cases: p1d_ctrl_m0 p1d_casc30_m0 p1d_rad15_m0 p1d_rad40_m0
+free disk: 61 GB
+
+== p1d_ctrl_m0  started 2026-08-16T15:48:16-04:00
+   OK    2.77 h, 5 reconstructed time(s)
+== p1d_casc30_m0  started 2026-08-16T18:34:20-04:00

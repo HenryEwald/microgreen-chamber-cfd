@@ -63,8 +63,32 @@ maxCo           6;
 maxDeltaT       1e-3;
 
 writeControl    adjustableRunTime;
+
+// ⚠ BOTH of these are SET BY generate_case.sh. The values here are placeholders
+// and the generator asserts it replaced them.
+//
+// writeInterval was the THIRD hard-coded constant left sized for a superseded
+// operating point, after maxDeltaT (2026-08-15) and the port area (2026-08-16).
+// It was 0.5 s, chosen when tau was 7.29 s -- 0.069 tau per frame, i.e. 96
+// frames over a 6.6-tau run, which animates fine. At the Oe 40 operating point
+// tau is 0.71 s and endTime is 4.69 s, so the SAME 0.5 s gives NINE frames.
+// It has to scale with tau exactly like endTime does, so it is now derived as
+// endTime / --frames.
 writeInterval   0.5;
-purgeWrite      5;             // CLAUDE.md 3.3 -- disk is the binding constraint
+
+// purgeWrite 0 -- KEEP EVERY FRAME. Changed from 5 on 2026-08-16.
+//
+// purgeWrite 5 deletes the history AS THE RUN PROCEEDS, and there is no
+// recovering it afterwards: the only route back is to resume from the final
+// state and re-run, which is what doc/animation_* had to do. It cost the
+// diffuser screen's control arm its frames before the setting was changed.
+//
+// The disk argument that justified it is real but belongs at generation time,
+// not baked into the template -- so generate_case.sh now PROJECTS the frame
+// cost from the mesh size and refuses to generate a case that would not fit.
+// CLAUDE.md 3.3's "decide per study, and decide BEFORE the run" is thereby
+// enforced rather than advised.
+purgeWrite      0;
 
 writeFormat     binary;
 writePrecision  8;

@@ -29,6 +29,7 @@ used to close both 2.5 mm slots, and the only symptom was 15.5 mL missing.
 
 import argparse
 import os
+import re
 
 from paraview.simple import *  # noqa: F401,F403
 
@@ -37,11 +38,30 @@ from paraview.simple import *  # noqa: F401,F403
 PATCH_RGB = {
     "inlet":  (0.16, 0.55, 0.85),
     "outlet": (0.90, 0.40, 0.25),
-    "hood":   (0.75, 0.75, 0.78),
-    "walls":  (0.62, 0.66, 0.70),
-    "floor":  (0.45, 0.48, 0.52),
-    "tray":   (0.35, 0.62, 0.35),
+    "hood":     (0.75, 0.75, 0.78),
+    "walls":    (0.62, 0.66, 0.70),
+    "floor":    (0.45, 0.48, 0.52),
+    "tray":     (0.35, 0.62, 0.35),
+    "diffuser": (0.85, 0.75, 0.20),
 }
+
+
+def patches_present(case):
+    """Patch names that actually have faces in this mesh.
+
+    Two patches in PATCH_RGB are conditional and asking for either when it is
+    absent gives an EMPTY RENDER rather than an error (extract_patch selects by
+    assembly path, and a path that matches nothing is not a failure):
+
+      * `floor`  -- gone since the tray went flush; it has no fluid faces at all
+                    and snappy drops it from constant/polyMesh/boundary (6.1);
+      * `diffuser` -- only exists on cases generated with --diffuser.
+    """
+    bnd = os.path.join(case, "constant", "polyMesh", "boundary")
+    with open(bnd) as f:
+        txt = f.read()
+    return [p for p in PATCH_RGB
+            if re.search(r"^\s*%s\s*$" % re.escape(p), txt, re.M)]
 
 BG = (0.10, 0.11, 0.13)
 EDGE = (0.05, 0.05, 0.06)
@@ -56,12 +76,11 @@ def new_view(size=(1600, 1100)):
     return v
 
 
-def load(case):
+def load(case, patches):
     foam = os.path.join(case, "case.foam")
     open(foam, "a").close()
     src = OpenFOAMReader(registrationName="case.foam", FileName=foam)
-    src.MeshRegions = ["internalMesh"] + \
-        ["patch/" + p for p in PATCH_RGB]
+    src.MeshRegions = ["internalMesh"] + ["patch/" + p for p in patches]
     src.CellArrays = []
     src.Decomposepolyhedra = 0
     src.UpdatePipeline()
@@ -120,11 +139,14 @@ def main():
     os.makedirs(out, exist_ok=True)
     print("rendering", case, "->", out)
 
-    src = load(case)
+    patches = patches_present(case)
+    print("  patches:", ", ".join(patches))
+    src = load(case, patches)
 
     # -- 1. exterior, coloured by patch ------------------------------------
     view = new_view()
-    for name, rgb in PATCH_RGB.items():
+    for name in patches:
+        rgb = PATCH_RGB[name]
         blk = extract_patch(src, name)
         d = Show(blk, view)
         d.Representation = "Surface"
@@ -211,6 +233,68 @@ def main():
     view.CameraFocalPoint = [0.06, 0.093, 0.060]
     view.CameraViewUp = [0, 0, 1]
     save(view, os.path.join(out, "06_cutaway.png"))
+    Delete(clip)
+    Delete(view)
+
+    # -- 7-8. the inlet vane cascade ---------------------------------------
+    # Only on cases generated with --diffuser. This is the feature the whole
+    # 2026-08-16 change exists to test, and the two things worth checking by eye
+    # are exactly the two that pass checkMesh when wrong:
+    #
+    #   * are all five vanes THERE, and separated? At 1.5 mm thickness and
+    #     level 4 (0.417 mm) a vane is only ~3.6 cells thick. If snappy had
+    #     merged a vane into its neighbour, or dissolved one into the shroud,
+    #     the mesh would still be valid and the volume deficit would be a
+    #     fraction of a mL -- indistinguishable from ordinary discretisation.
+    #   * does the CURVE come through, or has it been faceted into a flat
+    #     plate? A flat plate turns the flow by a different angle than the one
+    #     the case name claims, which would silently corrupt the whole screen.
+    if "diffuser" in patches:
+        # x-normal cut on the port centreline: every vane section at once,
+        # showing the camber and the descent along the chord.
+        view = new_view((1300, 1100))
+        sl = Slice(Input=src)
+        sl.SliceType = "Plane"
+        sl.SliceType.Origin = [0.060, 0, 0]
+        sl.SliceType.Normal = [1, 0, 0]
+        d = Show(sl, view)
+        d.Representation = "Surface With Edges"
+        d.ColorArrayName = [None, ""]
+        d.DiffuseColor = [0.80, 0.83, 0.87]
+        d.EdgeColor = list(EDGE)
+        d.LineWidth = 1.2
+        view.InteractionMode = "2D"
+        view.CameraPosition = [0.5, 0.016, 0.0667]
+        view.CameraFocalPoint = [0.06, 0.016, 0.0667]
+        view.CameraViewUp = [0, 0, 1]
+        # 52 mm tall x 61 mm wide, centred on the cascade. Must clear BOTH the
+        # shroud (z 44.7-88.7 mm) and the vane descent, which is 4.1 mm at 45
+        # deg -- framing on the vane leading edges alone clips the bottom vane
+        # on exactly the case where the turning is most worth looking at.
+        view.CameraParallelScale = 0.026
+        save(view, os.path.join(out, "07_diffuser_slice.png"))
+        Delete(sl)
+        Delete(view)
+
+        # the cascade as a surface, looking in through the inlet
+        view = new_view((1500, 1200))
+        for name in ("diffuser", "inlet", "walls", "tray"):
+            if name not in patches:
+                continue
+            blk = extract_patch(src, name)
+            d = Show(blk, view)
+            d.Representation = "Surface"
+            d.ColorArrayName = [None, ""]
+            d.DiffuseColor = list(PATCH_RGB[name])
+            d.AmbientColor = list(PATCH_RGB[name])
+            d.Opacity = {"walls": 0.12, "tray": 0.25, "inlet": 0.35}.get(name, 1.0)
+        ResetCamera(view)
+        view.CameraPosition = [0.135, -0.075, 0.115]
+        view.CameraFocalPoint = [0.060, 0.010, 0.0667]
+        view.CameraViewUp = [0, 0, 1]
+        view.CameraParallelScale = 0.040
+        save(view, os.path.join(out, "08_diffuser_3d.png"))
+        Delete(view)
 
     print("done")
 

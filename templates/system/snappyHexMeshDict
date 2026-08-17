@@ -40,6 +40,13 @@ geometry
         }
     }
 
+    // diffuser.stl is INSERTED HERE by generate_case.sh --diffuser <tilt>, and
+    // is deliberately absent from the template. snappy fails hard on a
+    // triSurfaceMesh whose file does not exist, and the control arm of the
+    // diffuser screen has no diffuser.stl at all, so the entry cannot be
+    // unconditional. Keeping the template as the no-diffuser case also means
+    // every pre-2026-08-16 case still regenerates unchanged.
+
     // Volume refinement around the two port jets. The jet sets the entire flow
     // field (CLAUDE.md 6.2), so it is resolved well past the opening.
     inletJet
@@ -150,7 +157,8 @@ castellatedMeshControls
                 hood    { level (2 2); patchInfo { type wall; } }
                 floor   { level (1 1); patchInfo { type wall; } }
                 walls   { level (1 1); patchInfo { type wall; } }
-                // The jet openings. Level 2 => 48 cells across the port at m2.
+                // The jet openings. Level 2 => 48 cells across a Oe 20 port at
+                // m2, and twice that since the port went to Oe 40 (2026-08-16).
                 inlet   { level (2 2); patchInfo { type patch; } }
                 outlet  { level (2 2); patchInfo { type patch; } }
             }
@@ -164,6 +172,11 @@ castellatedMeshControls
                 tray    { level (2 2); patchInfo { type wall; } }
             }
         }
+
+        // The `diffuser` refinementSurface is INSERTED HERE by generate_case.sh
+        // at level 4, alongside the geometry entry above. Level 4 is 0.417 mm
+        // at m0, i.e. ~3.6 cells across a 1.5 mm vane -- the minimum that
+        // represents a plate as a plate rather than as a rough wall.
     }
 
     resolveFeatureAngle     30;
@@ -241,6 +254,14 @@ addLayersControls
         // where layer collapse shows up first. `floor` gets no layers in
         // practice -- it has no fluid faces at all now (see make_geometry.py).
         tray    { nSurfaceLayers 4; }
+
+        // The `diffuser` layer entry is INSERTED HERE by generate_case.sh, at
+        // nSurfaceLayers 0. A 1.5 mm vane resolved at 0.417 mm cannot carry a
+        // 4-layer stack on both faces -- the two stacks would meet in the middle
+        // and collapse. This is the same reason the tray carried 0 layers until
+        // it went flush, and it carries the same consequence: VANE WALL SHEAR IS
+        // NOT REPORTABLE. It is not needed; the vanes are a flow-turning device,
+        // not a heat-transfer surface.
     }
 
     expansionRatio      1.2;

@@ -15,8 +15,16 @@
 #                     2 = buoyantSimpleFoam
 #   --mesh    m0|m1|m2|m3                           default m2
 #                     m0/m1/m2 is the independence ladder; m3 is NOT buildable
-#   --Q       M3H     fan volumetric flow, m3/h     default 1.25
-#                     ladder is 5 / 2.5 / 1.25; 5 is FREE AIR, an upper bound
+#   --Q       M3H     fan volumetric flow, m3/h     default: SOLVED from the
+#                     fan curve against the system curve for the chosen --portD.
+#                     Pass it only to force an operating point off that curve;
+#                     the script warns when you do.
+#   --portD   MM      port diameter, both ports     default 40
+#   --diffuser DEG    inlet vane angle              default none (control)
+#   --diffuserType cascade|radial                   default cascade
+#                     cascade = horizontal turning vanes, DEG = downward tilt
+#                     radial  = swirl diffuser, DEG = vane cant (S grows with it)
+#   --vanes   N       vanes in the diffuser         default 5
 #   --g       VALUE   gravity magnitude, m/s2       default 9.81
 #   --led     WATTS   LED panel power (phase 2)     default 38.4
 #   --model   kOmegaSST|laminar                     default kOmegaSST
@@ -28,6 +36,10 @@
 #                     and simpleFoam cannot converge on it.
 #   --endTime   S     transient end time, seconds   default 6.6 * tau
 #   --avgStart  S     start time averaging, seconds default 2.75 * tau
+#   --frames    N     write times over the run     default 60
+#                     writeInterval = endTime/N, and purgeWrite is 0, so
+#                     EVERY frame is kept and the run is animatable. The
+#                     generator projects the disk cost and warns.
 #
 # The transient defaults are multiples of the residence time tau = V_air / Q, so
 # they scale correctly with --Q: a lower flow rate has a proportionally longer
@@ -36,31 +48,63 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# Q default is 1.25 m3/h, NOT the 5 m3/h datasheet figure (changed 2026-08-14).
-# 5 is the LD3007MS FREE-AIR rating -- zero back-pressure -- and CLAUDE.md 6.2
-# estimates this chamber presents >= 30 Pa of load, at or beyond the shut-off of
-# a 30 mm axial fan, on top of a 30 mm fan blowing into a 20 mm hole (44 % of the
-# face area). The delivered flow is "plausibly half or less". 1.25 is the bottom
-# rung of the 5 / 2.5 / 1.25 ladder and the most likely of the three to bracket
-# the real operating point.
+# ---------------------------------------------------------------------------
+# Q is no longer a constant. HISTORY, because two of these were retracted and
+# should not be re-derived:
 #
-# ⚠ RETRACTED 2026-08-15. This comment used to add: "It is also 4x cheaper to
-# run transient, because the Courant-limited dt scales as 1/U." That is WRONG
-# and it was one of the stated reasons for the default. dt does scale as 1/U,
-# but tau = V_air/Q scales as 1/Q too, so a 6.6-tau run is the SAME ~24.5 k
-# steps at every flow rate -- the two cancel exactly. Low Q is not cheaper; it
-# is not more expensive either. See CLAUDE.md 5.1.
+#  2026-08-14  default moved 5 -> 1.25 m3/h. 5 is the LD3007MS FREE-AIR rating
+#              at zero back-pressure; the chamber presents >= 30 Pa, at or past
+#              a 30 mm axial fan's shut-off, so delivered flow was "plausibly
+#              half or less" and 1.25 was the ladder rung most likely to
+#              bracket it.
+#  2026-08-15  RETRACTED the cost half of that argument. "Low Q is 4x cheaper
+#              transient" is WRONG: dt ~ 1/U but tau = V_air/Q ~ 1/Q too, so a
+#              6.6-tau run is the SAME step count at every flow rate. The
+#              free-air argument was untouched and carried the choice alone.
+#  2026-08-16  default is now SOLVED, not chosen, because the fan and the port
+#              both changed and Q is a consequence of them rather than a free
+#              parameter. See the fan block below.
 #
-# The free-air argument above is untouched and still carries the choice on its
-# own. This is still a PLACEHOLDER pending the Dp-Q curve (CLAUDE.md 10.2) -- a
-# better-motivated placeholder than 5, not a measurement.
+# Note the cost identity above assumed a FIXED port. It does not survive the
+# port change: steps ~ endTime/dt ~ (1/Q)/(1/U) = U/Q ~ 1/A, so quadrupling the
+# port area makes the transient ~4x CHEAPER (~5 h vs ~20 h at m0+jetRefine).
+# Q rises 9.4x but U_in only 2.35x, and it is U that sets dt.
 #
-# NOTE the interaction with --led: dT scales as 1/Q, so moving the default from
-# 5 to 1.25 m3/h made the Phase 2 thermal picture 4x worse. At this Q the LED
-# ceiling for a 3 K rise is ~1.3 W, not the ~5 W CLAUDE.md 6.3's table implies.
-# The phase-2 block below warns about it at generation time.
-NAME="" ; PHASE=1 ; MESH=m2 ; Q_M3H=1.25 ; GVAL=9.81 ; LED=38.4 ; MODEL=kOmegaSST
+# NOTE the interaction with --led: dT scales as 1/Q, so the LED ceiling moves
+# with the flow rate. At Q = 1.25 it was ~1.3 W for a 3 K rise; at the Oe 40
+# operating point (~11.8 m3/h) it is ~12 W. The phase-2 block below computes it.
+NAME="" ; PHASE=1 ; MESH=m2 ; Q_M3H="" ; GVAL=9.81 ; LED=38.4 ; MODEL=kOmegaSST
 TRANSIENT=0 ; END_TIME="" ; AVG_START="" ; JETREFINE=0
+PORT_D_MM=40 ; DIFF_TILT="" ; DIFF_VANES="" ; DIFF_TYPE=cascade
+FRAMES=60
+
+# --- fan, and why Q is now DERIVED rather than defaulted ---------------------
+# The fan changed on 2026-08-16: LD3007MS (30x30x7 mm, 5 m3/h free air) ->
+# Sunon MF50100V2-1000U-A99 (50x50x10 mm, 5 VDC, 0.085 A, 430 mW, 4800 rpm,
+# 11.0 CFM = 18.69 m3/h free air, 0.110 inch-H2O = 27.4 Pa shut-off).
+#
+# It is a FLOW upgrade, not a PRESSURE one -- 27.4 Pa shut-off is the same class
+# as the part it replaces, because that is simply what axial fans are. Against a
+# Q^2 system curve the PORT DIAMETER therefore does most of the work: the loss
+# goes as D^-4, so Oe 20 -> Oe 40 takes the delivered flow 4.25 -> 11.8 m3/h off
+# the same fan.
+#
+# That coupling is exactly why Q is no longer a hard-coded default. Changing
+# --portD without changing --Q used to leave the case running the old flow rate
+# through a new hole, which is not a physical operating point at all. Q is now
+# solved from the fan curve and the system curve unless --Q overrides it.
+#
+#   fan    : dp = DPMAX * (1 - Q/QFREE)        linear between the two datasheet
+#                                              endpoints; the real mid-curve is
+#                                              a plot image on page 5 of the PDF
+#   system : dp = KSYS * 0.5 * rho * (Q/A)^2   KSYS = 2.5 = 1.0 port dynamic
+#                                              head + 0.5 inlet contraction
+#                                              + 1.0 outlet discharge (6.2)
+#
+# STILL A PLACEHOLDER, for a different reason than before: the endpoints are
+# measured, the mid-curve shape and KSYS are estimates. Measure the delivered
+# flow before publishing anything (CLAUDE.md 10.2 item 1).
+FAN_QFREE=18.69 ; FAN_DPMAX=27.4 ; KSYS=2.5 ; RHO_AIR=1.2
 
 # Run length and averaging window, as multiples of tau.
 #   6.60 tau  total  -- long enough for statistics after the startup is thrown away
@@ -80,6 +124,11 @@ while [ $# -gt 0 ]; do
         --model)     MODEL=$2 ; shift 2 ;;
         --transient) TRANSIENT=1 ; shift 1 ;;
         --jetRefine) JETREFINE=1 ; shift 1 ;;
+        --portD)     PORT_D_MM=$2 ; shift 2 ;;
+        --diffuser)  DIFF_TILT=$2 ; shift 2 ;;
+        --vanes)     DIFF_VANES=$2 ; shift 2 ;;
+        --diffuserType) DIFF_TYPE=$2 ; shift 2 ;;
+        --frames)    FRAMES=$2 ; shift 2 ;;
         --endTime)   END_TIME=$2  ; shift 2 ;;
         --avgStart)  AVG_START=$2 ; shift 2 ;;
         *) echo "unknown option: $1" >&2 ; exit 1 ;;
@@ -176,6 +225,159 @@ grep -q "^nx  $NX;" system/blockMeshDict \
 # just "Mesh OK". templates/Allrun does this. A sealed feature is invisible to
 # every other mesh metric.
 
+# --- geometry: port size and the inlet diffuser ------------------------------
+# Run the generator NOW, at generation time, rather than leaving it to Allrun.
+# Two reasons: it verifies the surfaces before the case is even handed over, and
+# it emits constant/triSurface/geometry.info, which is where the port area and
+# V_air below come from. Those were previously HARD-CODED CONSTANTS in this
+# script (3.14159265e-4 and 2.3296e-3) -- duplicated from make_geometry.py, and
+# duplicated constants are precisely what drifted when the tray went flush.
+PORT_R_M=$(awk -v d="$PORT_D_MM" 'BEGIN{printf "%.6f", d/2000.0}')
+GEOM_ARGS="--port-r $PORT_R_M"
+if [ -n "$DIFF_TILT" ]; then
+    GEOM_ARGS="$GEOM_ARGS --diffuser-type $DIFF_TYPE --diffuser-tilt $DIFF_TILT"
+    [ -n "$DIFF_VANES" ] && GEOM_ARGS="$GEOM_ARGS --diffuser-vanes $DIFF_VANES"
+fi
+
+# Allrun regenerates the geometry if the STLs are missing, so it needs the same
+# arguments. Carrying them in the case (rather than re-deriving them) is what
+# keeps a regenerated surface identical to the one that was verified here.
+printf '%s\n' "$GEOM_ARGS" > system/geometryArgs
+
+python3 "$ROOT/scripts/make_geometry.py" --case . $GEOM_ARGS --verify \
+    > log.makeGeometry 2>&1 \
+  || { echo "geometry generation FAILED:" >&2; cat log.makeGeometry >&2; exit 1; }
+
+_geom() { awk -v k="$1" '$1==k{print $2}' constant/triSurface/geometry.info; }
+A_PORT=$(_geom PORT_AREA)
+V_AIR=$(_geom V_AIR)          # m3, NOT litres -- do not divide by 1000 again
+[ -n "$A_PORT" ] && [ -n "$V_AIR" ] \
+  || { echo "geometry.info missing PORT_AREA/V_AIR" >&2 ; exit 1 ; }
+
+# --- port-sized refinement regions ------------------------------------------
+# inletJet / outletJet / jetShear hug the port, so they have to MOVE WITH IT.
+# They were written for Oe 20 and would have left the Oe 40 jet refined over
+# only its middle half -- which passes checkMesh, produces a plausible field,
+# and is wrong. Margins are the ones the dict documents: 10 mm around the port
+# for the jet boxes, 4 mm for the shear box.
+#
+# NOT foamDictionary. `foamDictionary -set` REWRITES THE WHOLE FILE from the
+# parsed dictionary, which silently discards every comment in it -- measured
+# here, snappyHexMeshDict went 300 -> 255 lines and lost all of its
+# documentation, including the anchor the jetShear insertion below greps for.
+# The comments in that dict are the record of why each refinement level is what
+# it is (CLAUDE.md 7), so losing them is not cosmetic.
+#
+# Targeted in-place edit instead: rewrite only the min/max lines inside the
+# named block, and assert afterwards that all six landed.
+python3 - "$PORT_R_M" <<'PY'
+import re, sys
+r = float(sys.argv[1])
+PX, PZ, SPRING = 0.060, 0.066667, 0.096667
+# name -> (x/z margin, y_min, y_max)
+BOXES = {"inletJet":  (0.010, -0.001, 0.050),
+         "outletJet": (0.010,  0.136, 0.188),
+         "jetShear":  (0.004, -0.001, 0.030)}
+p = "system/snappyHexMeshDict"
+s = open(p).read()
+n = 0
+for name, (m, y0, y1) in BOXES.items():
+    # clamp z above the hood spring line: the hood's own surface refinement
+    # already covers that region, and the box would only duplicate it.
+    lo = "(%.6f %.6g %.6f)" % (PX - r - m, y0, PZ - r - m)
+    hi = "(%.6f %.6g %.6f)" % (PX + r + m, y1, min(PZ + r + m, SPRING))
+    blk = re.search(r"(^    %s\s*\n    \{.*?^    \})" % re.escape(name),
+                    s, re.S | re.M)
+    if blk is None:
+        raise SystemExit("refinement region %s not found" % name)
+    body = blk.group(1)
+    new = re.sub(r"^(\s*min\s+)\S.*?;", r"\g<1>%s;" % lo, body, count=1, flags=re.M)
+    new = re.sub(r"^(\s*max\s+)\S.*?;", r"\g<1>%s;" % hi, new,  count=1, flags=re.M)
+    if new == body:
+        raise SystemExit("failed to rewrite min/max in %s" % name)
+    s = s[:blk.start(1)] + new + s[blk.end(1):]
+    n += 2
+open(p, "w").write(s)
+print("  ports     rescaled %d refinement-region bounds" % n)
+PY
+echo "  ports     Oe${PORT_D_MM} mm, A = ${A_PORT} m2"
+
+# --- inlet vane diffuser ----------------------------------------------------
+# Three insertions, all conditional on --diffuser, because the control arm has
+# no diffuser.stl and snappy fails hard on a triSurfaceMesh with no file.
+if [ -n "$DIFF_TILT" ]; then
+    python3 - "$DIFF_TILT" <<'PY'
+import re, sys
+tilt = sys.argv[1]
+p = "system/snappyHexMeshDict"
+s = open(p).read()
+
+geom = '''    diffuser.stl
+    {
+        type        triSurfaceMesh;
+        name        diffuser;
+        regions
+        {
+            diffuser { name diffuser; }
+        }
+    }
+
+'''
+anchor = "    // diffuser.stl is INSERTED HERE"
+assert anchor in s, "geometry anchor missing from snappyHexMeshDict"
+s = s.replace(anchor, geom + anchor, 1)
+
+surf = '''        diffuser
+        {
+            level       (4 4);
+            regions
+            {
+                diffuser { level (4 4); patchInfo { type wall; } }
+            }
+        }
+
+'''
+anchor = "        // The `diffuser` refinementSurface is INSERTED HERE"
+assert anchor in s, "refinementSurfaces anchor missing"
+s = s.replace(anchor, surf + anchor, 1)
+
+anchor = "        // The `diffuser` layer entry is INSERTED HERE"
+assert anchor in s, "layers anchor missing"
+s = s.replace(anchor, "        diffuser { nSurfaceLayers 0; }\n\n" + anchor, 1)
+
+open(p, "w").write(s)
+PY
+    grep -q "name        diffuser;" system/snappyHexMeshDict \
+      && grep -q "diffuser { level (4 4)" system/snappyHexMeshDict \
+      && grep -q "diffuser { nSurfaceLayers 0; }" system/snappyHexMeshDict \
+      || { echo "failed to insert diffuser into snappyHexMeshDict" >&2 ; exit 1 ; }
+
+    # The diffuser is a no-slip wall like any other, so it has to match the
+    # 0.orig patch regexes. They are alternations, and a patch matching NONE of
+    # them is a fatal "unable to find patchField" at solver start -- not a
+    # silent default. Cheap to do, loud to get wrong.
+    for f in 0.orig/U 0.orig/p 0.orig/k 0.orig/omega 0.orig/nut; do
+        [ -f "$f" ] || continue
+        sed -i 's/"(floor|walls|hood|tray)"/"(floor|walls|hood|tray|diffuser)"/' "$f"
+    done
+    grep -lq "hood|tray|diffuser" 0.orig/U \
+      || { echo "failed to add diffuser to the 0.orig patch regexes" >&2 ; exit 1 ; }
+    _sw=$(_geom DIFF_SWIRL)
+    echo "  diffuser  $DIFF_TYPE, $(_geom DIFF_VANES) vanes at ${DIFF_TILT} deg, level 4, 0 layers"
+    # Plain double quotes inside the single-quoted awk program. Backslash-escaped
+    # quotes are literal backslashes to awk, not quoting, and it dies with
+    # "runaway string constant" -- on stderr, while the surrounding echo still
+    # prints, so the swirl line looked fine and the >0.6 WARNING never fired.
+    if [ "$_sw" != none ]; then
+        echo "            swirl number S = $_sw"
+        awk -v s="$_sw" 'BEGIN{ if (s > 0.6) {
+            print "  !! S > 0.6: expect vortex breakdown and a central"
+            print "     recirculation bubble -- re-breathing in a closed box." } }'
+    fi
+else
+    echo "  diffuser  none (control arm)"
+fi
+
 # --- jet shear-layer refinement (opt-in) ------------------------------------
 # Adds the `jetShear` region at ONE LEVEL ABOVE inletJet. See snappyHexMeshDict
 # for the geometry and for why this is opt-in rather than default.
@@ -192,19 +394,65 @@ if [ "$JETREFINE" = 1 ]; then
 fi
 
 # --- fan flow rate ----------------------------------------------------------
-# 5 m3/h is the LD3007MS FREE-AIR rating, an upper bound (CLAUDE.md 6.2).
+# Solve the fan curve against the system curve unless --Q overrode it. Bisection
+# rather than anything cleverer: the residual is monotone in Q on [0, QFREE]
+# (fan pressure falls, system loss rises), so 60 halvings is exact to machine
+# precision and cannot fail to bracket.
+# The vane cascade is part of the system curve too. K ~ 0.2 on the port dynamic
+# head is the usual figure for well-formed turning vanes, i.e. ~0.8 Pa here
+# against ~17 Pa of spare head -- so it costs about 1 % of Q, not enough to
+# matter but wrong to omit. It does mean the diffused arms run at a marginally
+# lower Q than the control, which is the physically honest comparison: a real
+# diffuser does cost flow. The difference is far below the run-to-run noise.
+if [ -n "$DIFF_TILT" ]; then
+    KSYS=$(awk -v k="$KSYS" 'BEGIN{printf "%.3f", k + 0.2}')
+fi
+
+if [ -z "$Q_M3H" ]; then
+    Q_M3H=$(awk -v qf="$FAN_QFREE" -v dp="$FAN_DPMAX" -v k="$KSYS" \
+                -v rho="$RHO_AIR" -v a="$A_PORT" 'BEGIN{
+        lo=0; hi=qf;
+        for(i=0;i<60;i++){
+            q=(lo+hi)/2;
+            f=dp*(1-q/qf) - k*0.5*rho*(q/3600.0/a)^2;
+            if(f>0) lo=q; else hi=q;
+        }
+        printf "%.3f", (lo+hi)/2;
+    }')
+    DP_OP=$(awk -v k="$KSYS" -v rho="$RHO_AIR" -v a="$A_PORT" -v q="$Q_M3H" \
+        'BEGIN{printf "%.1f", k*0.5*rho*(q/3600.0/a)^2}')
+    echo "  fan       Sunon MF50100V2 on Oe${PORT_D_MM} mm  ->  Q $Q_M3H m3/h at $DP_OP Pa"
+    echo "            (solved from the fan curve; override with --Q)"
+else
+    DP_OP=$(awk -v k="$KSYS" -v rho="$RHO_AIR" -v a="$A_PORT" -v q="$Q_M3H" \
+        'BEGIN{printf "%.1f", k*0.5*rho*(q/3600.0/a)^2}')
+    DP_FAN=$(awk -v qf="$FAN_QFREE" -v dp="$FAN_DPMAX" -v q="$Q_M3H" \
+        'BEGIN{printf "%.1f", dp*(1-q/qf)}')
+    # A hand-set Q is a physical claim about the fan, so check it against the
+    # curve instead of taking it on trust.
+    awk -v s="$DP_OP" -v f="$DP_FAN" 'BEGIN{exit !(s > f + 0.5)}' && {
+        echo "  !! Q = $Q_M3H m3/h needs $DP_OP Pa but the fan gives only $DP_FAN Pa there."
+        echo "     This operating point is OFF the fan curve -- it is an assumption,"
+        echo "     not a delivered flow. Drop --Q to solve for the real one."
+    }
+fi
+
 Q_M3S=$(awk -v q="$Q_M3H" 'BEGIN{printf "%.6e", q/3600.0}')
-U_IN=$(awk  -v q="$Q_M3S" 'BEGIN{printf "%.4f", q/3.14159265e-4}')
-RE=$(awk    -v u="$U_IN"  'BEGIN{printf "%.0f", u*0.02/1.516e-5}')
+U_IN=$(awk  -v q="$Q_M3S" -v a="$A_PORT" 'BEGIN{printf "%.4f", q/a}')
+RE=$(awk    -v u="$U_IN" -v d="$PORT_D_MM" 'BEGIN{printf "%.0f", u*d/1000.0/1.516e-5}')
 foamDictionary -entry "boundaryField/inlet/volumetricFlowRate" -set "$Q_M3S" 0.orig/U > /dev/null 2>&1
 
 # tau is needed by the transient block below, so derive it here rather than
 # down with the rest of the notes arithmetic.
-V_AIR=2.3296e-3         # m3, NOT litres -- do not divide by 1000 again.
-#                         Flush tray, 2026-08-16: was 2.530e-3 when the tray had
-#                         side slots and end gaps. CLAUDE.md 6.1.
 ACH=$(awk -v q="$Q_M3H" -v v="$V_AIR" 'BEGIN{printf "%.0f", q/v}')
 TAU=$(awk -v q="$Q_M3S" -v v="$V_AIR" 'BEGIN{printf "%.2f", v/q}')
+
+# U_bulk is the scale the tray metric actually lives on, and at the new
+# operating point it is the whole design story: the chamber CANNOT be
+# over-ventilated (0.8 m/s in the bulk would need 35.9 m3/h), so the only way to
+# exceed the ceiling anywhere is a surviving jet core, and the only way to reach
+# 0.3 m/s everywhere is piston-like flow. A_free = 124.8 cm2 (CLAUDE.md 6.2).
+U_BULK=$(awk -v q="$Q_M3S" 'BEGIN{printf "%.3f", q/1.248e-2}')
 
 # --- gravity (CLAUDE.md 5.2) ------------------------------------------------
 foamDictionary -entry value -set "(0 0 -$GVAL)" constant/g > /dev/null 2>&1
@@ -300,6 +548,44 @@ if [ "$TRANSIENT" = 1 ]; then
     sed -i "s/^endTime         12;/endTime         $END_TIME;/" system/controlDict
     grep -q "^endTime         $END_TIME;" system/controlDict \
       || { echo "failed to set endTime in system/controlDict" >&2 ; exit 1 ; }
+
+    # --- writeInterval must scale with the flow, like endTime does -----------
+    # Third constant found sized for a superseded operating point, after
+    # maxDeltaT and the port area. A fixed 0.5 s was 96 frames when tau was
+    # 7.29 s and is NINE frames at tau = 0.71 s -- enough to restart from,
+    # nowhere near enough to animate. Derive it from a frame count instead, so
+    # every run is animatable at every flow rate by construction.
+    WRITE_INT=$(awk -v e="$END_TIME" -v n="$FRAMES" 'BEGIN{printf "%.6g", e/n}')
+    sed -i "s/^writeInterval   0.5;/writeInterval   $WRITE_INT;/" system/controlDict
+    grep -q "^writeInterval   $WRITE_INT;" system/controlDict \
+      || { echo "failed to set writeInterval in system/controlDict" >&2 ; exit 1 ; }
+
+    # purgeWrite 0 is the template default now, but assert it: the whole point
+    # of this block is that a run cannot silently end up unanimatable, and a
+    # stale template would do exactly that.
+    grep -q "^purgeWrite      0;" system/controlDict \
+      || { echo "system/controlDict does not have purgeWrite 0 -- frames would" >&2
+           echo "be deleted as the run proceeds and CANNOT be recovered." >&2
+           exit 1 ; }
+
+    # --- project the disk cost, BEFORE the run ------------------------------
+    # 271 bytes/cell/write measured 2026-08-16 on p1d_ctrl_m0 (382,613 cells,
+    # kOmegaSST, binary, including the *Mean and _0 fields). Phase 2 adds T and
+    # alphat: CLAUDE.md 3.3 measured that at +40 %.
+    BPC=271 ; [ "$PHASE" = 2 ] && BPC=380
+    # Background cells under-count the final mesh badly (snappy multiplies it),
+    # so scale by the measured m0 ratio of final/background = 382613/12673 = 30.
+    EST_CELLS=$(( NX * NY * NZ * 30 ))
+    EST_GB=$(awk -v c="$EST_CELLS" -v b="$BPC" -v n="$FRAMES" \
+        'BEGIN{printf "%.1f", c*b*n/1024/1024/1024}')
+    FREE_GB=$(df -BG --output=avail "$ROOT" | tail -1 | tr -dc '0-9')
+    echo "  frames    $FRAMES at writeInterval ${WRITE_INT}s, purgeWrite 0"
+    echo "            projected ~${EST_GB} GB of time directories (${FREE_GB} GB free)"
+    if awk -v e="$EST_GB" -v f="$FREE_GB" 'BEGIN{exit !(e > f*0.5)}'; then
+        echo "  !! that is more than half the free disk. Lower --frames, or free"
+        echo "     space, before running this. Frames cannot be recovered after"
+        echo "     the fact, but disk exhaustion mid-run loses the whole case."
+    fi
 
     sed -i "s/__AVG_START__/$AVG_START/" system/functions/transientMonitors
     # `if`, not `grep ... && { }` -- under `set -e` the latter's exit status is
