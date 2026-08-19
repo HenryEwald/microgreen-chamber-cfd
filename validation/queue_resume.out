@@ -1,0 +1,8 @@
+diffuser screen started 2026-08-18T02:49:30-04:00
+cases: p1d_rad15_m0 p1d_rad40_m0
+free disk: 50 GB
+
+== p1d_rad15_m0  started 2026-08-18T02:49:30-04:00
+   OK    8.01 h, 60 reconstructed time(s)
+         reconstruction complete (60 of ~60 frames); freed 6702 MB of processor*/
+== p1d_rad40_m0  started 2026-08-18T10:49:52-04:00

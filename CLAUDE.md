@@ -151,6 +151,29 @@ OpenFOAM is **memory-bandwidth bound**, not FLOP bound. Consequences:
 
 **Keep ≥ 50 k cells/rank.** Below ~30 k, halo exchange dominates and scaling inverts.
 
+> ### ⚠ MEASURED 2026-08-17 — do NOT pair two cases across the CCDs. It is a net LOSS.
+>
+> `scripts/run_diffuser_screen.sh` offers `FOAM_CPUSET=0-7 ./Allrun & FOAM_CPUSET=8-15 ./Allrun &`
+> as a way to double throughput. It does not. Measured on two ~490 k-cell `pimpleFoam` cases,
+> 8 ranks each, doing **the same work per step** (8.00 vs 8.15 PIMPLE outer iterations, so the
+> comparison is clean):
+>
+> | | s/step | steps/s |
+> |---|---|---|
+> | `p1d_casc30_m0` alone, CCD0 | 1.920 | **0.521** |
+> | same case, CCD0, while CCD1 is busy | 3.077 (**1.60× slower**) | 0.325 |
+> | `p1d_rad15_m0` on CCD1, concurrently | 5.217 | 0.192 |
+> | **paired total** | | **0.517** |
+>
+> **0.517 against 0.521 — pairing buys nothing at all**, and costs the incumbent a 1.60×
+> slowdown. Two independent causes, both in this file already: the machine is
+> memory-bandwidth bound (§3.2 opening), and **CCD1 is 1.70× slower per step than CCD0 for
+> this workload** — the clearest measurement yet of what the 96 MB V-cache is worth, since
+> both halves ran identical solvers on near-identical meshes.
+>
+> **Run cases sequentially on CCD0.** Pair only when the second job is not bandwidth-bound
+> (post-processing, meshing, rendering).
+
 > **`templates/Allrun` implements this automatically** (since 2026-08-14). It reads the *final*
 > cell count from `log.checkMesh` — not the background count — and **halves** the rank count
 > from `decomposeParDict` until the 50 k/rank floor is met, only falling back to serial if even
@@ -823,6 +846,53 @@ object will show this immediately.
 >    identity assumes a **fixed port**. Steps ∝ endTime/Δt ∝ (1/`Q`)/(1/`U`) = `U`/`Q` ∝ 1/`A`,
 >    and quadrupling `A_port` raises `Q` 9.4× but `U_in` only 2.35×. This is what makes a
 >    4-case diffuser screen affordable at all.
+>
+>    > #### ⚠ MEASURED 2026-08-17 — true for the CONTROL only. A DIFFUSED case costs 12.6–20.4 h.
+>    >
+>    > The identity above is arithmetic about the **port**, and it silently assumes the port
+>    > cell stays the smallest cell in the mesh. Adding a diffuser breaks that: level-4
+>    > `refinementSurfaces` on the vanes puts 0.417 mm cells in the **fastest flow in the
+>    > domain**, and Courant ∝ `U`/Δx then re-imposes a limit the port scaling knows nothing
+>    > about. `maxCo 6` binds instead of `maxDeltaT`, and Δt collapses:
+>    >
+>    > | case | vanes | Δt | binds on | steps to 6.6 τ | measured |
+>    > |---|---|---|---|---|---|
+>    > | `p1d_ctrl_m0` | none | 8.333e-4 | `maxDeltaT` (jet Co 2.6) | 5,647 | **2.77 h** ✓ ~5 h claim |
+>    > | `p1d_casc30_m0` | 5, cascade | 2.034e-4 | **`maxCo`** | 23,697 | **12.6 h** |
+>    > | `p1d_rad15_m0` | 12 + Ø 12 hub | 1.260e-4 | **`maxCo`** | 38,245 | **20.4 h** (proj.) |
+>    >
+>    > **The radial concepts are ~1.6× the cascade** because 12 vanes plus a Ø 12 mm hub block
+>    > far more of the bore than 5 plates, so the passage runs faster. **A 4-case screen is
+>    > ~53 h, not ~20 h.**
+>    >
+>    > **This cost is REAL and there is no numerics fix.** Measured on the `CourantNo` field at
+>    > t = 1.044 s, against the completed control as the reference for what this project has
+>    > already accepted:
+>    >
+>    > | volume fraction above | ctrl @ its Δt | casc30 @ its Δt | casc30 if `maxDeltaT` bound |
+>    > |---|---|---|---|
+>    > | Co > 3 | 0.00133 % | 0.0120 % | **1.371 %** |
+>    > | Co > 4 | **0 %** | 0.00138 % | **0.935 %** |
+>    > | Co > 6 | **0 %** | 0 % | **0.293 %** |
+>    > | max Co | 3.03 | 6.00 | **25.11** |
+>    >
+>    > Raising `maxCo` to "restore the `maxDeltaT` design intent" would put ~1 % of the domain
+>    > at Courant numbers the control never reaches anywhere, concentrated in the vane passage
+>    > that is the object of the study. Note casc30's *volume-weighted mean* Co is 0.114 against
+>    > the control's 0.230 — **the constraint is the tail, not the mean.**
+>    >
+>    > Refinement cannot buy it back either, because the high-Co cells are spread through the
+>    > passage rather than piled at one feature — 72 % of the Co > 2 cells sit at r < 19 mm,
+>    > inside the bore between the vanes:
+>    >
+>    > | change | Δt gain | verdict |
+>    > |---|---|---|
+>    > | shroud only, level 4 → 3 | **1.06×** | useless |
+>    > | whole diffuser, level 4 → 3 | **2.00×** | 1.5 mm vane on 1.8 cells — the §7 tray-slot pathology, applied to the feature under study |
+>    >
+>    > **So the only remaining levers are scope, not numerics:** drop a concept, or screen at
+>    > level 3 and confirm the winner at level 4. Cutting `endTime` is not one of them — see
+>    > the record-length lesson in §10.3.
 > 3. **The chamber CANNOT be over-ventilated.** `U_bulk` = 0.8 m/s would need 35.9 m³/h, far
 >    beyond this fan at any port size. So the only way to exceed the 0.8 m/s ceiling anywhere
 >    is a surviving jet core, and the only way to reach 0.3 m/s everywhere is piston-like flow.
@@ -1589,6 +1659,13 @@ used, and no figure derived from them goes out without the caveat on it.
 | Can the tray carry surface layers now? | **Yes, and it does — 4, matching the walls.** `nSurfaceLayers 0` existed only because layers would not fit in a 6-cell slot. Measured at m0: **3.97 layers, 85.3 % coverage**, better than the walls' 70.1 %. **Tray wall shear is reportable on flush-tray cases** — and only those | 2026-08-16 |
 | ⚠ Why is `tray.eMesh` missing from snappy `features`? | **Deliberate — putting it back corrupts the mesh.** The flush tray is written 1 mm oversize so its faces are not coplanar with the walls, which means every one of its edges is buried in solid. Explicit feature snapping then drags mesh points onto them, leaving a **skirt 1 mm past the chamber walls** (patch bboxes x = −0.001…0.121) and a **+0.49 mL** volume excess = perimeter × 1 mm × 0.8 mm. Removing it gives an exactly flat tray patch and −0.34 mL. Caught by the volume check, invisible to `Mesh OK` | 2026-08-16 |
 | Is the flush-tray tray metric comparable to the old one? | **No.** `trayPlane` now averages over 0.0224 m² *including the near-wall boundary layers*; the old 0.014375 m² window sat entirely in the interior. Expect a lower mean speed from the window change alone. **Do not compare against the 0.02947 m/s Phase 1 headline like-for-like** | 2026-08-16 |
+| Why is a DIFFUSED case 4× slower than the control? | **Genuine physics, not a stale constant.** Level-4 refinement puts 0.417 mm cells in the fastest flow, so `maxCo 6` binds instead of `maxDeltaT` and Δt falls 8.333e-4 → 2.034e-4. Verified on the `CourantNo` field: 100 % of Co > 3 cells lie within 12 mm of the inlet face, median edge 0.415 mm — **level-4 cells, not slivers.** The mesh's actual smallest cell (0.147 mm shroud sliver) is NOT the limiter | 2026-08-17 |
+| Can `maxCo` be raised to recover it? | **No.** At `maxDeltaT` the diffused mesh reaches **max Co 25.1**, with 0.935 % of domain volume above Co 4 where the accepted control has **exactly 0 %**. The tail, not the mean, is the constraint — casc30's volume-weighted mean Co is 0.114 vs the control's 0.230, i.e. it is *more* time-resolved on average | 2026-08-17 |
+| Can refinement be cut to recover it? | **Not without damaging the study.** Shroud-only level 4 → 3 gives **1.06×** (72 % of high-Co cells are in the vane passage, not at the shroud); whole-diffuser 4 → 3 gives exactly **2.00×** but puts a 1.5 mm vane on 1.8 cells — the §7 tray-slot pathology applied to the feature being screened | 2026-08-17 |
+| Do the three diffuser concepts cost the same? | **No — radial is ~1.6× the cascade.** 12 vanes + a Ø 12 mm hub block far more bore than 5 plates, so the passage runs faster and Δt falls: casc30 2.034e-4 (23,697 steps, 12.6 h) vs rad15 1.260e-4 (38,245 steps, ~20.4 h). **The screen is ~53 h, not ~20 h** | 2026-08-17 |
+| Does pairing two cases across the CCDs help? | **No — measured 0.517 steps/s paired vs 0.521 solo, a net loss**, while slowing the incumbent 1.60×. CCD1 is **1.70× slower per step** than CCD0 on identical work. Run sequentially on CCD0. See §3.2 | 2026-08-17 |
+| ⚠ Does `Allrun` resume an interrupted run? | **No — and worse, it silently skips.** `runPinned` carries the same `[ -f log.$app ] && return 0` guard as `runApplication`, so re-running `Allrun` on an interrupted case **skips the solve entirely** and reconstructs whatever partial state exists as though finished. To resume: move `log.<solver>` aside (leave `log.decomposePar.fields` in place so `processor*/` survives) and re-run — `startFrom latestTime` does the rest, bit-exactly, since `writeFormat binary` stores raw doubles | 2026-08-17 |
+| ⚠ Does a SIGSTOP'd run survive its session? | **No.** A suspended job gets SIGHUP+SIGCONT when the owning session exits and dies — observed as `mpirun: Forwarding signal 18 to job` as the last log line. Launch long runs with `setsid nohup … &` so they are reparented to init and immune | 2026-08-17 |
 
 ### 10.4 Needed later, not blocking anything now
 
